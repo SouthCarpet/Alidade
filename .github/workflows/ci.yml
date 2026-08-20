@@ -1,7 +1,18 @@
 name: CI
 
+# Deliberately NOT on every push to a branch. Day-to-day work is verified
+# locally (cargo build / test / clippy are the same three commands this job
+# runs), so a run per push mostly repeats a check that already passed.
+#
+# It still runs where a local check cannot substitute:
+#   - release tags, so nothing ships without a clean build on a clean machine
+#   - pull requests, where the code is someone else's and has not been run here
+#   - on demand: gh workflow run ci.yml --repo SouthCarpet/Alidade
 on:
+  workflow_dispatch:
   push:
+    tags:
+      - "v*"
   pull_request:
 
 permissions:
