@@ -1,5 +1,6 @@
 use alidade_engine::{
-    CloudflareProvider, EndpointConfig, SpeedProvider, MAX_REQUEST_BYTES, UPLOAD_CHUNK_BYTES,
+    CloudflareProvider, EndpointConfig, EngineError, SpeedProvider, MAX_REQUEST_BYTES,
+    UPLOAD_CHUNK_BYTES,
 };
 use std::time::{Duration, Instant};
 use wiremock::{
@@ -409,5 +410,156 @@ async fn a_download_stopped_by_its_ceiling_reports_itself_capped() {
     assert!(
         measured.capped,
         "a phase the ceiling ended must say so, or a truncated measurement reads as a normal one"
+    );
+}
+
+async fn received_get_count(server: &MockServer) -> usize {
+    server.received_requests().await.unwrap().len()
+}
+
+/// F2. A 429 on the first chunk is not a one-shot skip that the next
+/// `download()` immediately retries. The second call must return the rate-
+/// limit condition without issuing another request.
+#[tokio::test]
+async fn a_429_is_not_retried_before_backoff_elapses() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/__down"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    let provider = CloudflareProvider::with_download_chunk_bytes(endpoints(&server), 64 * 1024);
+    let budget = Duration::from_millis(200);
+
+    let first = provider.download(budget, None).await.unwrap_err();
+    match &first {
+        EngineError::RateLimited(limit) => {
+            assert_eq!(limit.consecutive, 1);
+            assert_eq!(limit.retry_after, Duration::from_secs(15 * 60));
+        }
+        other => panic!("first 429 must be RateLimited, got {other}"),
+    }
+    assert!(
+        first.to_string().contains("rate-limiting us"),
+        "skip reason must be distinguishable from a generic status: {first}"
+    );
+    assert_eq!(received_get_count(&server).await, 1);
+
+    let second = provider.download(budget, None).await.unwrap_err();
+    match &second {
+        EngineError::RateLimited(limit) => {
+            assert_eq!(
+                limit.consecutive, 1,
+                "a skip inside the same backoff is the same condition, not a new 429"
+            );
+            assert!(limit.retry_after > Duration::ZERO);
+            assert!(limit.retry_after <= Duration::from_secs(15 * 60));
+        }
+        other => panic!("backoff skip must be RateLimited, got {other}"),
+    }
+    assert_eq!(
+        received_get_count(&server).await,
+        1,
+        "a 429 must not be retried before the backoff elapses"
+    );
+}
+
+/// F2. When the server sends `Retry-After` as delay-seconds, that value is
+/// the wait — not the built-in 15-minute schedule.
+#[tokio::test]
+async fn retry_after_delay_seconds_are_honoured() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/__down"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "1"))
+        .mount(&server)
+        .await;
+
+    let provider = CloudflareProvider::with_download_chunk_bytes(endpoints(&server), 64 * 1024);
+    let budget = Duration::from_millis(200);
+
+    let first = provider.download(budget, None).await.unwrap_err();
+    match &first {
+        EngineError::RateLimited(limit) => {
+            assert_eq!(limit.retry_after, Duration::from_secs(1));
+            assert_eq!(limit.consecutive, 1);
+        }
+        other => panic!("expected RateLimited honouring Retry-After, got {other}"),
+    }
+    assert_eq!(received_get_count(&server).await, 1);
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _still_waiting = provider.download(budget, None).await.unwrap_err();
+    assert_eq!(
+        received_get_count(&server).await,
+        1,
+        "must not retry before Retry-After elapses"
+    );
+
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    let after = provider.download(budget, None).await.unwrap_err();
+    match &after {
+        EngineError::RateLimited(limit) => {
+            assert_eq!(
+                limit.consecutive, 2,
+                "a 429 after the wait is the same limit still active — the sustained case"
+            );
+        }
+        other => panic!("expected a second 429 to stay RateLimited, got {other}"),
+    }
+    assert_eq!(
+        received_get_count(&server).await,
+        2,
+        "Retry-After of 1s was not honoured — the client did not come back after the wait"
+    );
+    assert!(
+        after.to_string().contains("sustained"),
+        "two 429s must read as one sustained condition, not two hiccups: {after}"
+    );
+}
+
+/// F2. Bytes that already crossed the wire survive a 429 on a later chunk.
+/// The phase is a measurement, not a discarded attempt; backoff is still
+/// armed so the next call does not hammer the limit.
+#[tokio::test]
+async fn a_429_after_chunks_were_measured_keeps_the_bytes() {
+    let server = MockServer::start().await;
+    let chunk: u64 = 256 * 1024;
+    Mock::given(method("GET"))
+        .and(path("/__down"))
+        .respond_with(LikeCloudflareDown)
+        .up_to_n_times(2)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/__down"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    let provider = CloudflareProvider::with_download_chunk_bytes(endpoints(&server), chunk);
+    let measured = provider
+        .download(Duration::from_millis(300), Some(8_000_000))
+        .await
+        .expect("bytes already measured must survive a later 429");
+
+    assert_eq!(measured.bytes, chunk * 2);
+    assert!(measured.bits_per_sec > 0.0);
+    assert_eq!(received_get_count(&server).await, 3, "two successes then one 429");
+
+    let skipped = provider
+        .download(Duration::from_millis(300), Some(8_000_000))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(skipped, EngineError::RateLimited(_)),
+        "the 429 must arm backoff even though this phase kept its bytes: {skipped}"
+    );
+    assert_eq!(
+        received_get_count(&server).await,
+        3,
+        "the follow-up call must not hit the server while backoff is in force"
     );
 }

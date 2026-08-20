@@ -11,6 +11,7 @@ mod provider;
 mod round;
 mod schedule;
 
+use std::fmt;
 use std::time::Duration;
 
 pub use config::{Settings, TargetSpec, MIN_CADENCE};
@@ -24,6 +25,53 @@ pub use round::{
     MIN_UNDER_LOAD_SAMPLES,
 };
 pub use schedule::{RoundPlan, Scheduler};
+
+/// A 429 from the throughput source. Distinct from [`EngineError::Status`]:
+/// a rate limit is one condition that lasts across rounds, not a per-round
+/// hiccup, and the round runner records this type's Display as
+/// `skipped_reason` so the UI and CSV can say so.
+///
+/// `consecutive` is the number of 429s received since the last successful
+/// download phase. `>= 2` is the sustained case (the limit was still there
+/// when we came back). A skip while still inside the backoff window reuses
+/// the same count — it is the same condition, not a new failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateLimit {
+    pub retry_after: Duration,
+    pub consecutive: u32,
+}
+
+impl fmt::Display for RateLimit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let wait = format_wait(self.retry_after);
+        if self.consecutive >= 2 {
+            write!(
+                f,
+                "throughput source is rate-limiting us (sustained, {} 429s); retry after {wait}",
+                self.consecutive
+            )
+        } else {
+            write!(
+                f,
+                "throughput source is rate-limiting us; retry after {wait}"
+            )
+        }
+    }
+}
+
+fn format_wait(wait: Duration) -> String {
+    // Sub-second remainders still have to read as a wait, not "0s".
+    let secs = wait.as_secs().max(1);
+    if secs.is_multiple_of(3600) {
+        format!("{}h", secs / 3600)
+    } else if secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else if secs >= 60 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -39,6 +87,10 @@ pub enum EngineError {
     Io(#[from] std::io::Error),
     #[error("invalid settings: {0}")]
     Config(String),
+    /// See [`RateLimit`]. The round runner prefixes this with `"provider: "`
+    /// when recording a skip reason, same as every other provider error.
+    #[error("{0}")]
+    RateLimited(RateLimit),
     /// Catch-all for a provider-reported failure that isn't an HTTP/status/
     /// timeout error (e.g. `MockProvider::failing()` in tests). The round
     /// runner (Task 4) prefixes this with `"provider: "` when recording a

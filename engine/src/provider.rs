@@ -16,13 +16,13 @@
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
 
 use futures_core::Stream;
 
-use crate::EngineError;
+use crate::{EngineError, RateLimit};
 
 /// One measured phase: bytes actually moved, how long the measurement clock
 /// ran, and the derived rate.
@@ -97,6 +97,10 @@ pub struct CloudflareProvider {
     client: reqwest::Client,
     cfg: EndpointConfig,
     download_chunk_bytes: u64,
+    /// Survives across `download()` calls on this instance so a 429 in one
+    /// round stops the next round from hammering the same limit. Callers
+    /// that construct a fresh provider per round throw this away.
+    rate_limit: Mutex<Option<RateLimitHold>>,
 }
 
 impl CloudflareProvider {
@@ -116,6 +120,7 @@ impl CloudflareProvider {
             client: reqwest::Client::new(),
             cfg,
             download_chunk_bytes: chunk_bytes.clamp(1, MAX_REQUEST_BYTES - 1),
+            rate_limit: Mutex::new(None),
         }
     }
 
@@ -140,8 +145,8 @@ impl CloudflareProvider {
             Ok(Err(e)) => return Err(EngineError::Http(e)),
             Err(_elapsed) => return Err(EngineError::Timeout(send_budget)),
         };
-        if !resp.status().is_success() {
-            return Err(EngineError::Status(resp.status().as_u16()));
+        if let Some(err) = self.status_error(&resp) {
+            return Err(err);
         }
 
         let start = Instant::now();
@@ -159,6 +164,69 @@ impl CloudflareProvider {
             }
         }
         Ok((bytes_read, start.elapsed()))
+    }
+
+    fn rate_limit_lock(&self) -> std::sync::MutexGuard<'_, Option<RateLimitHold>> {
+        self.rate_limit.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// If a previous 429 is still in force, return that condition without
+    /// touching the network.
+    fn check_rate_limit(&self) -> Result<(), EngineError> {
+        let guard = self.rate_limit_lock();
+        let Some(hold) = guard.as_ref() else {
+            return Ok(());
+        };
+        let now = Instant::now();
+        if now >= hold.not_before {
+            return Ok(());
+        }
+        Err(EngineError::RateLimited(RateLimit {
+            retry_after: hold.not_before.saturating_duration_since(now),
+            consecutive: hold.consecutive,
+        }))
+    }
+
+    fn note_rate_limited(&self, retry_after: Option<Duration>) -> EngineError {
+        let mut guard = self.rate_limit_lock();
+        let consecutive = guard
+            .as_ref()
+            .map(|hold| hold.consecutive.saturating_add(1))
+            .unwrap_or(1);
+        let wait = retry_after
+            .filter(|wait| !wait.is_zero())
+            .unwrap_or_else(|| default_backoff(consecutive));
+        *guard = Some(RateLimitHold {
+            not_before: Instant::now() + wait,
+            consecutive,
+        });
+        EngineError::RateLimited(RateLimit {
+            retry_after: wait,
+            consecutive,
+        })
+    }
+
+    fn clear_rate_limit(&self) {
+        *self.rate_limit_lock() = None;
+    }
+
+    /// Map a non-success status onto a typed error. 429 becomes
+    /// [`EngineError::RateLimited`] and arms backoff; anything else is a
+    /// one-shot [`EngineError::Status`].
+    fn status_error(&self, resp: &reqwest::Response) -> Option<EngineError> {
+        let status = resp.status().as_u16();
+        if status == 429 {
+            let retry_after = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(parse_retry_after);
+            Some(self.note_rate_limited(retry_after))
+        } else if resp.status().is_success() {
+            None
+        } else {
+            Some(EngineError::Status(status))
+        }
     }
 }
 
@@ -193,17 +261,66 @@ pub const MAX_REQUEST_BYTES: u64 = 100_000_000;
 
 /// Bytes asked for per download request. A phase is time-bounded, so it
 /// issues as many of these as fit in the budget; the size only decides how
-/// much of the budget goes to payload rather than to request overhead.
+/// many requests that takes, and how much of the budget goes to payload
+/// rather than to per-request overhead.
 ///
-/// 25 MB is the balance point. One `reqwest::Client` is reused for the whole
-/// phase, so the cost between chunks is a header round-trip (~20 ms here),
-/// not a TLS handshake: on a 1 Gbit/s link a chunk is ~200 ms of payload
-/// against that ~20 ms, so ~90% of the wall clock still carries data, and on
-/// slower links the ratio only improves. Going much larger buys little and
-/// makes the final chunk ask the server for far more than the remaining
-/// budget can drain; going much smaller spends the budget on round-trips.
-/// It must in any case stay below `MAX_REQUEST_BYTES`.
-pub const DOWNLOAD_CHUNK_BYTES: u64 = 25_000_000;
+/// 90,000,000 — not 25,000,000 — because the request count is what tripped
+/// Cloudflare's rate limit. A 10 s phase at 200 Mbit/s moves 250 MB; at
+/// 25 MB per request that is ten GETs per round, and eleven consecutive
+/// rounds then came back 429. 90 MB was measured live as HTTP 200 (see the
+/// table on `MAX_REQUEST_BYTES`); at the same 200 Mbit/s / 10 s point that
+/// is three requests, not ten. 99 MB also 200, so 90 MB sits 9 MB inside
+/// proven-good territory and 10 MB (10%) below the 403 ceiling — enough
+/// because that ceiling is a hard equality at 100,000,000, not a fuzzy
+/// "around 100 MB". The constructor still clamps every request below
+/// `MAX_REQUEST_BYTES`, so raising this cannot reintroduce the 403.
+///
+/// A 1 Gbit/s / 10 s phase (1.25 GB) is ~14 requests instead of ~50. One
+/// `reqwest::Client` is reused, so the cost between chunks is a header
+/// round-trip (~20 ms here), not a TLS handshake: at 1 Gbit/s a 90 MB
+/// chunk is ~0.72 s of payload against that ~20 ms.
+pub const DOWNLOAD_CHUNK_BYTES: u64 = 90_000_000;
+
+/// First wait when a 429 carries no usable `Retry-After`. Fifteen minutes
+/// is longer than the 5-minute cadence that hammered the soak, short enough
+/// that a one-off 429 does not eat the next hourly production round, and
+/// the first step of a doubling that reaches the ~2 h window the live
+/// limit actually occupied.
+const RATE_LIMIT_BACKOFF_START: Duration = Duration::from_secs(15 * 60);
+
+/// Cap for the absent-header schedule. The soak's limit was still active
+/// an hour after the last 429 and had cleared about two hours after that;
+/// waiting longer than the observed recovery is worse than probing once.
+const RATE_LIMIT_BACKOFF_CAP: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// `Retry-After` delay-seconds (RFC 9110 §10.2.3). Values above a day are
+/// clamped so a garbage integer cannot park download forever.
+const RETRY_AFTER_DELAY_CAP: Duration = Duration::from_secs(24 * 60 * 60);
+
+struct RateLimitHold {
+    not_before: Instant,
+    consecutive: u32,
+}
+
+/// Delay-seconds only. The HTTP-date form (`IMF-fixdate`) is unhandled:
+/// this crate has no HTTP-date parser, and a date we cannot interpret is
+/// treated as an absent header so the built-in schedule still backs off
+/// rather than retrying immediately.
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    let secs: u64 = value.trim().parse().ok()?;
+    if secs == 0 {
+        return None;
+    }
+    Some(Duration::from_secs(secs).min(RETRY_AFTER_DELAY_CAP))
+}
+
+fn default_backoff(consecutive: u32) -> Duration {
+    // 15 m, 30 m, 60 m, 120 m, then the cap.
+    let shift = consecutive.saturating_sub(1).min(3);
+    RATE_LIMIT_BACKOFF_START
+        .saturating_mul(1u32 << shift)
+        .min(RATE_LIMIT_BACKOFF_CAP)
+}
 
 /// Extra time allowed, beyond the phase `budget`, for the server to send
 /// its *first* response bytes (download) or to finish acknowledging a
@@ -248,12 +365,14 @@ impl SpeedProvider for CloudflareProvider {
         budget: Duration,
         max_bytes: Option<u64>,
     ) -> Result<Throughput, EngineError> {
+        self.check_rate_limit()?;
         let deadline = Instant::now() + budget;
         let mut bytes_read: u64 = 0;
         // Sum of the per-chunk body-read times. Deliberately excludes each
         // chunk's header round-trip (see `Throughput::duration`).
         let mut measured = Duration::ZERO;
         let mut capped = false;
+        let mut hit_rate_limit = false;
 
         loop {
             let bytes_left = max_bytes.map(|max| max.saturating_sub(bytes_read));
@@ -272,9 +391,20 @@ impl SpeedProvider for CloudflareProvider {
                     bytes_read += bytes;
                     measured += spent;
                 }
+                Err(e @ EngineError::RateLimited(_)) if bytes_read == 0 => return Err(e),
+                Err(EngineError::RateLimited(_)) => {
+                    // Bytes already measured stay; backoff is armed so the
+                    // next round does not hammer the same 429.
+                    hit_rate_limit = true;
+                    break;
+                }
                 Err(e) if bytes_read == 0 => return Err(e),
                 Err(_partial) => break,
             }
+        }
+
+        if !hit_rate_limit {
+            self.clear_rate_limit();
         }
 
         Ok(Throughput {
@@ -335,8 +465,8 @@ impl SpeedProvider for CloudflareProvider {
         };
         let duration = start.elapsed();
 
-        if !resp.status().is_success() {
-            return Err(EngineError::Status(resp.status().as_u16()));
+        if let Some(err) = self.status_error(&resp) {
+            return Err(err);
         }
 
         let bytes_sent = sent.load(Ordering::Relaxed);

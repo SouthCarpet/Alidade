@@ -177,6 +177,10 @@ async fn continuous(
     // One connection for the whole run: re-opening the database every round
     // re-ran the migration check and re-took the file lock for no gain.
     let store = open_store()?;
+    // One provider for the whole run: a 429's backoff lives on the
+    // instance, and a fresh provider each round would forget it and hit
+    // the same limit again.
+    let provider = CloudflareProvider::new(settings.endpoints.clone());
     println!(
         "continuous mode; full round every {}, ping-only round every {}; press Ctrl+C to stop",
         format_duration(settings.throughput_every),
@@ -187,7 +191,6 @@ async fn continuous(
         let plan = scheduler.plan_next_round(started);
         scheduler.record_round_start(started, plan.kind);
         let metrics = intersect_metrics(plan.metrics, metrics_for(&settings, &metric_args));
-        let provider = CloudflareProvider::new(settings.endpoints.clone());
         let mut result =
             run_round(&provider, &round_config(&settings, metrics, plan.byte_ceiling)).await;
         if result.skipped_reason.is_none() {
