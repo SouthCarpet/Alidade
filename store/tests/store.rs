@@ -1,15 +1,23 @@
-use alidade_engine::{PingSample, PingStats, RoundResult, Throughput};
+use alidade_engine::{LoadWindow, PingSample, PingStats, RoundKind, RoundResult, Throughput};
 use alidade_store::Store;
 use std::time::{Duration, SystemTime};
 
 fn round_with(down: Option<Throughput>, up: Option<Throughput>, ping_idle: Option<PingStats>) -> RoundResult {
     RoundResult {
         started_at: SystemTime::now(),
+        kind: if down.is_some() || up.is_some() {
+            RoundKind::Full
+        } else {
+            RoundKind::PingOnly
+        },
         down,
         up,
         ping_idle,
         ping_down: None,
         ping_up: None,
+        down_load: None,
+        up_load: None,
+        capped: down.is_some_and(|t| t.capped) || up.is_some_and(|t| t.capped),
         skipped_reason: None,
     }
 }
@@ -19,6 +27,7 @@ fn some_down() -> Throughput {
         bits_per_sec: 100_000_000.0,
         bytes: 1_250_000,
         duration: Duration::from_secs(1),
+        capped: false,
     }
 }
 
@@ -55,6 +64,7 @@ fn round_roundtrips_with_null_metrics_preserved() {
     let s = Store::open(&dir.path().join("a.db")).unwrap();
     let r = RoundResult {
         started_at: SystemTime::now(),
+        kind: RoundKind::Full,
         down: Some(some_down()),
         up: None,
         ping_idle: Some(some_idle_ping()),
@@ -74,6 +84,12 @@ fn round_roundtrips_with_null_metrics_preserved() {
             loss_pct: 5.0,
             sent: 8,
         }),
+        down_load: Some(LoadWindow {
+            duration: Duration::from_millis(9_800),
+            ping_samples: 8,
+        }),
+        up_load: None,
+        capped: false,
         skipped_reason: None,
     };
     let id = s.insert_round(&r).unwrap();
@@ -83,6 +99,14 @@ fn round_roundtrips_with_null_metrics_preserved() {
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert!(rows[0].down_bps.is_some() && rows[0].up_bps.is_none());
+    assert_eq!(rows[0].mode, RoundKind::Full);
+    assert!(!rows[0].capped);
+    // The load window is what `ping_down_ms` is worth: 8 samples across 9.8 s
+    // of real load is a measurement, and the row has to be able to say so.
+    assert_eq!(rows[0].load_down_ms, Some(9_800.0));
+    assert_eq!(rows[0].ping_down_samples, Some(8));
+    assert_eq!(rows[0].load_up_ms, None);
+    assert_eq!(rows[0].ping_up_samples, None);
     // Per-phase jitter/loss is the bufferbloat signal: idle vs under-load
     // must survive storage as six distinct values, not collapse to idle.
     assert_eq!(rows[0].jitter_idle_ms, Some(1.5));
@@ -244,11 +268,13 @@ fn csv_export_writes_a_header_and_one_line_per_round() {
             bits_per_sec: 50_000_000.0,
             bytes: 625_000,
             duration: Duration::from_secs(1),
+            capped: false,
         }),
         Some(Throughput {
             bits_per_sec: 20_000_000.0,
             bytes: 250_000,
             duration: Duration::from_secs(1),
+            capped: false,
         }),
         None,
     ))
@@ -260,7 +286,60 @@ fn csv_export_writes_a_header_and_one_line_per_round() {
     assert_eq!(n, 2);
     let text = std::fs::read_to_string(&out).unwrap();
     assert!(text.starts_with(
-        "started_at,down_mbps,up_mbps,ping_idle_ms,ping_down_ms,ping_up_ms,jitter_ms,loss_pct"
+        "started_at,mode,down_mbps,up_mbps,ping_idle_ms,ping_down_ms,ping_up_ms,jitter_ms,loss_pct,capped"
     ));
     assert_eq!(text.lines().count(), 3);
+}
+
+/// F1 + F3 through the whole store: the kind of a round and the fact that a
+/// data budget truncated it must reach the CSV. A `ping` row has no
+/// throughput because none was asked for, and a `capped` row's speeds came
+/// from a window the budget cut short — an export that shows neither hands
+/// the reader three rows that look like the same kind of measurement.
+#[test]
+fn the_csv_says_which_kind_of_round_each_row_is_and_whether_it_was_capped() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(&dir.path().join("a.db")).unwrap();
+
+    s.insert_round(&round_with(Some(some_down()), None, Some(some_idle_ping())))
+        .unwrap();
+    s.insert_round(&round_with(
+        Some(Throughput {
+            bits_per_sec: 165_000_000.0,
+            bytes: 104_857_600,
+            duration: Duration::from_secs(5),
+            capped: true,
+        }),
+        None,
+        Some(some_idle_ping()),
+    ))
+    .unwrap();
+    s.insert_round(&round_with(None, None, Some(some_idle_ping())))
+        .unwrap();
+
+    let out = dir.path().join("rounds.csv");
+    s.export_rounds_csv(SystemTime::UNIX_EPOCH, SystemTime::now(), &out)
+        .unwrap();
+    let text = std::fs::read_to_string(&out).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+
+    assert!(lines[1].contains(",full,") && lines[1].ends_with(",false"));
+    assert!(
+        lines[2].contains(",full,") && lines[2].ends_with(",true"),
+        "the capped round must be exported as capped: {}",
+        lines[2]
+    );
+    assert!(
+        lines[3].contains(",ping,"),
+        "a ping-only round must not read as a full round with a blank download: {}",
+        lines[3]
+    );
+
+    let rows = s
+        .rounds_between(SystemTime::UNIX_EPOCH, SystemTime::now())
+        .unwrap();
+    assert_eq!(rows[1].mode, RoundKind::Full);
+    assert!(rows[1].capped);
+    assert_eq!(rows[2].mode, RoundKind::PingOnly);
+    assert!(!rows[2].capped);
 }

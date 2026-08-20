@@ -65,7 +65,7 @@ async fn download_is_time_bounded_and_reports_measured_bytes() {
         download_url: format!("{}/__down", server.uri()),
         upload_url: format!("{}/__up", server.uri()),
     });
-    let t = p.download(Duration::from_secs(2), 2_000_000).await.unwrap();
+    let t = p.download(Duration::from_secs(2), Some(2_000_000)).await.unwrap();
     assert!(t.bytes > 0 && t.bytes <= 2_000_000, "bytes {}", t.bytes);
     assert!(t.duration <= Duration::from_secs(3), "duration {:?}", t.duration);
     assert!(t.bits_per_sec > 0.0);
@@ -83,7 +83,7 @@ async fn upload_posts_a_body_and_measures_it() {
         download_url: format!("{}/__down", server.uri()),
         upload_url: format!("{}/__up", server.uri()),
     });
-    let t = p.upload(Duration::from_secs(2), 1_000_000).await.unwrap();
+    let t = p.upload(Duration::from_secs(2), Some(1_000_000)).await.unwrap();
     assert!(t.bytes > 0 && t.bytes <= 1_000_000);
     assert!(t.bits_per_sec > 0.0);
 }
@@ -100,7 +100,7 @@ async fn a_server_error_is_an_error_not_a_zero_reading() {
         download_url: format!("{}/__down", server.uri()),
         upload_url: format!("{}/__up", server.uri()),
     });
-    assert!(p.download(Duration::from_secs(1), 1_000_000).await.is_err());
+    assert!(p.download(Duration::from_secs(1), Some(1_000_000)).await.is_err());
 }
 
 /// Proves the deadline — not the byte cap — is what stops a slow download.
@@ -127,7 +127,7 @@ async fn download_stops_on_the_clock_not_the_byte_cap() {
     let slack = Duration::from_secs(2);
 
     let call_start = Instant::now();
-    let t = p.download(budget, max_bytes).await.unwrap();
+    let t = p.download(budget, Some(max_bytes)).await.unwrap();
     let elapsed = call_start.elapsed();
 
     assert!(elapsed >= budget, "elapsed {:?} < budget {:?}", elapsed, budget);
@@ -165,7 +165,7 @@ async fn upload_stops_on_the_clock_not_the_byte_cap() {
     let slack = Duration::from_secs(2);
 
     let call_start = Instant::now();
-    let t = p.upload(budget, max_bytes).await.unwrap();
+    let t = p.upload(budget, Some(max_bytes)).await.unwrap();
     let elapsed = call_start.elapsed();
 
     assert!(elapsed >= budget, "elapsed {:?} < budget {:?}", elapsed, budget);
@@ -209,7 +209,7 @@ async fn no_download_request_ever_reaches_the_403_ceiling() {
 
     let provider = CloudflareProvider::new(endpoints(&server));
     let measured = provider
-        .download(Duration::from_millis(200), 100 * 1024 * 1024)
+        .download(Duration::from_millis(200), Some(100 * 1024 * 1024))
         .await
         .expect("a phase ceiling above the per-request limit must still measure, not 403");
 
@@ -255,7 +255,7 @@ async fn download_is_not_capped_by_what_one_request_can_deliver() {
     let budget = Duration::from_millis(500);
     let provider = CloudflareProvider::with_download_chunk_bytes(endpoints(&server), chunk);
 
-    let measured = provider.download(budget, 8_000_000).await.unwrap();
+    let measured = provider.download(budget, Some(8_000_000)).await.unwrap();
 
     let asked: Vec<u64> = server
         .received_requests()
@@ -308,7 +308,7 @@ async fn a_chunk_failing_after_bytes_were_measured_keeps_the_measurement() {
 
     let provider = CloudflareProvider::with_download_chunk_bytes(endpoints(&server), chunk);
     let measured = provider
-        .download(Duration::from_millis(300), 8_000_000)
+        .download(Duration::from_millis(300), Some(8_000_000))
         .await
         .expect("bytes already measured must survive a later chunk failing");
 
@@ -331,7 +331,7 @@ async fn upload_is_not_capped_by_its_chunk_size() {
 
     let provider = CloudflareProvider::new(endpoints(&server));
     let budget = Duration::from_millis(300);
-    let measured = provider.upload(budget, 64_000_000).await.unwrap();
+    let measured = provider.upload(budget, Some(64_000_000)).await.unwrap();
 
     let one_chunk_ceiling = UPLOAD_CHUNK_BYTES as f64 * 8.0 / budget.as_secs_f64();
     assert!(
@@ -348,5 +348,66 @@ async fn upload_is_not_capped_by_its_chunk_size() {
         server.received_requests().await.unwrap().len(),
         1,
         "the whole upload phase is one request; its chunks are body frames"
+    );
+}
+
+/// **F3.** No ceiling is the default (updated D6), and then the clock is the
+/// only thing that may end the phase. The server here will serve any chunk
+/// asked of it, forever, so a phase that stops early stopped for a reason
+/// that is not allowed to exist.
+#[tokio::test]
+async fn a_download_with_no_ceiling_runs_the_whole_budget_and_is_not_capped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/__down"))
+        .respond_with(LikeCloudflareDown)
+        .mount(&server)
+        .await;
+
+    let chunk: u64 = 256 * 1024;
+    let budget = Duration::from_millis(300);
+    let provider = CloudflareProvider::with_download_chunk_bytes(endpoints(&server), chunk);
+
+    let call_start = Instant::now();
+    let measured = provider.download(budget, None).await.unwrap();
+    let elapsed = call_start.elapsed();
+
+    assert!(
+        !measured.capped,
+        "nothing could have capped a phase with no ceiling"
+    );
+    assert!(
+        elapsed >= budget,
+        "the phase returned after {elapsed:?}, before its {budget:?} budget was spent"
+    );
+    assert!(measured.bytes > chunk, "measured {} bytes", measured.bytes);
+}
+
+/// **F3.** A ceiling still bounds the phase when one is given — that is how
+/// a nearly-spent daily data budget stops the app overrunning it — and the
+/// phase reports that the ceiling, not the clock, is what ended it.
+#[tokio::test]
+async fn a_download_stopped_by_its_ceiling_reports_itself_capped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/__down"))
+        .respond_with(LikeCloudflareDown)
+        .mount(&server)
+        .await;
+
+    let chunk: u64 = 64 * 1024;
+    let ceiling = chunk * 2;
+    // Generous budget: only the ceiling can end this phase.
+    let provider = CloudflareProvider::with_download_chunk_bytes(endpoints(&server), chunk);
+
+    let measured = provider
+        .download(Duration::from_secs(10), Some(ceiling))
+        .await
+        .unwrap();
+
+    assert_eq!(measured.bytes, ceiling, "the ceiling must bound the phase");
+    assert!(
+        measured.capped,
+        "a phase the ceiling ended must say so, or a truncated measurement reads as a normal one"
     );
 }

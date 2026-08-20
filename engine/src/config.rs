@@ -17,11 +17,26 @@ pub struct TargetSpec {
     pub enabled: bool,
 }
 
-/// Persistent application settings. Intervals are stored in TOML as whole seconds.
+/// Shortest cadence either interval may be set to. A full round is ~25 s of
+/// wall clock (spec D4), so anything under a minute would leave no gap
+/// between rounds; the same floor applies to `ping_every` per D5a.
+pub const MIN_CADENCE: Duration = Duration::from_secs(60);
+
+/// Persistent application settings. Cadences are stored in TOML as whole
+/// seconds.
+///
+/// There are TWO cadences, not one (spec D5a): throughput is expensive and
+/// hourly is ample for an ISP dispute, ping is nearly free and wants to be
+/// dense. One interval forced a choice between an honest measurement and
+/// ~37 GB/day of test traffic — see `schedule.rs` for how the two are run
+/// without ever overlapping.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub endpoints: EndpointConfig,
-    pub interval: Duration,
+    /// Gap between the starts of full (D4) throughput rounds.
+    pub throughput_every: Duration,
+    /// Gap between the starts of ping-only rounds (idle-ping phase alone).
+    pub ping_every: Duration,
     pub metrics: MetricSelection,
     pub targets: Vec<TargetSpec>,
     pub daily_budget_bytes: Option<u64>,
@@ -32,7 +47,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             endpoints: EndpointConfig::default(),
-            interval: Duration::from_secs(10 * 60),
+            throughput_every: Duration::from_secs(60 * 60),
+            ping_every: Duration::from_secs(5 * 60),
             metrics: MetricSelection {
                 download: true,
                 upload: true,
@@ -139,9 +155,10 @@ impl Settings {
     }
 
     /// Fast deterministic fixture used by scheduler tests.
-    pub fn test_default(interval: Duration) -> Self {
+    pub fn test_default(throughput_every: Duration, ping_every: Duration) -> Self {
         Self {
-            interval,
+            throughput_every,
+            ping_every,
             ..Self::default()
         }
     }
@@ -189,18 +206,25 @@ impl Settings {
         if let Some(target) = current {
             settings.targets.push(target.finish()?);
         }
-        if settings.interval < Duration::from_secs(60) {
-            return Err(EngineError::Config(
-                "interval must be at least 60 seconds".to_string(),
-            ));
+        for (name, value) in [
+            ("throughput_every_seconds", settings.throughput_every),
+            ("ping_every_seconds", settings.ping_every),
+        ] {
+            if value < MIN_CADENCE {
+                return Err(EngineError::Config(format!(
+                    "{name} must be at least {} seconds",
+                    MIN_CADENCE.as_secs()
+                )));
+            }
         }
         Ok(settings)
     }
 
     fn to_toml(&self) -> String {
         let mut out = format!(
-            "interval_seconds = {}\n{}raw_ping_retention_days = {}\n\n[endpoints]\ndownload_url = \"{}\"\nupload_url = \"{}\"\n\n[metrics]\ndownload = {}\nupload = {}\nping = {}\n",
-            self.interval.as_secs(), budget_lines(self.daily_budget_bytes), self.raw_ping_retention_days,
+            "throughput_every_seconds = {}\nping_every_seconds = {}\n{}raw_ping_retention_days = {}\n\n[endpoints]\ndownload_url = \"{}\"\nupload_url = \"{}\"\n\n[metrics]\ndownload = {}\nupload = {}\nping = {}\n",
+            self.throughput_every.as_secs(), self.ping_every.as_secs(),
+            budget_lines(self.daily_budget_bytes), self.raw_ping_retention_days,
             escape(&self.endpoints.download_url), escape(&self.endpoints.upload_url),
             self.metrics.download, self.metrics.upload, self.metrics.ping,
         );
@@ -276,7 +300,20 @@ fn apply_top_level(
     value: &str,
 ) -> Result<(), EngineError> {
     match (section, key) {
-        ("", "interval_seconds") => settings.interval = Duration::from_secs(parse_number(value)?),
+        // Legacy single cadence (before D5a). It meant "run the full round
+        // this often", so it maps onto `throughput_every` and leaves
+        // `ping_every` at its default. Silently dropping it would change a
+        // user's cadence behind their back; refusing it would make an
+        // existing settings file unloadable.
+        ("", "interval_seconds") => {
+            settings.throughput_every = Duration::from_secs(parse_number(value)?)
+        }
+        ("", "throughput_every_seconds") => {
+            settings.throughput_every = Duration::from_secs(parse_number(value)?)
+        }
+        ("", "ping_every_seconds") => {
+            settings.ping_every = Duration::from_secs(parse_number(value)?)
+        }
         ("", "daily_budget_bytes") => settings.daily_budget_bytes = parse_optional_number(value)?,
         ("", "raw_ping_retention_days") => settings.raw_ping_retention_days = parse_number(value)?,
         ("endpoints", "download_url") => settings.endpoints.download_url = parse_string(value)?,
@@ -409,19 +446,65 @@ mod tests {
     fn an_existing_settings_file_is_loaded_and_left_alone() {
         let dir = scratch_dir();
         let path = dir.path().join("settings.toml");
-        let hand_written = "interval_seconds = 900\n\n[metrics]\ndownload = false\n";
+        let hand_written =
+            "throughput_every_seconds = 900\nping_every_seconds = 120\n\n[metrics]\ndownload = false\n";
         fs::write(&path, hand_written).unwrap();
 
         let (settings, created) = Settings::load_or_create(&path).unwrap();
 
         assert!(!created);
-        assert_eq!(settings.interval, Duration::from_secs(900));
+        assert_eq!(settings.throughput_every, Duration::from_secs(900));
+        assert_eq!(settings.ping_every, Duration::from_secs(120));
         assert!(!settings.metrics.download);
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             hand_written,
             "loading must not rewrite the user's file"
         );
+    }
+
+    /// F1 migration. `interval_seconds` was the ONE cadence before D5a split
+    /// it in two. A file carrying it is a user's existing settings, so it has
+    /// to keep loading — mapped onto the throughput cadence it always meant,
+    /// with the new ping cadence at its default — and it must not be
+    /// rewritten or replaced on the way.
+    #[test]
+    fn a_settings_file_with_the_old_interval_key_still_loads_and_survives() {
+        let dir = scratch_dir();
+        let path = dir.path().join("settings.toml");
+        let old_file = "interval_seconds = 900\ndaily_budget_bytes = 5000000000\n";
+        fs::write(&path, old_file).unwrap();
+
+        let (settings, created) = Settings::load_or_create(&path).unwrap();
+
+        assert!(!created, "an existing file must not be reported as created");
+        assert_eq!(
+            settings.throughput_every,
+            Duration::from_secs(900),
+            "the old single interval meant the full round, so it becomes throughput_every"
+        );
+        assert_eq!(
+            settings.ping_every,
+            Settings::default().ping_every,
+            "the cadence the old file never had must land on its default"
+        );
+        assert_eq!(settings.daily_budget_bytes, Some(5_000_000_000));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            old_file,
+            "the user's existing file is data; loading it must not rewrite it"
+        );
+    }
+
+    #[test]
+    fn a_cadence_under_a_minute_is_refused_on_either_key() {
+        assert!(Settings::parse("throughput_every_seconds = 30\n").is_err());
+        assert!(Settings::parse("ping_every_seconds = 30\n").is_err());
+        assert!(
+            Settings::parse("interval_seconds = 30\n").is_err(),
+            "the legacy key maps onto throughput_every and inherits its floor"
+        );
+        assert!(Settings::parse("ping_every_seconds = 60\n").is_ok());
     }
 
     /// A hand edit that does not parse must stay on disk exactly as the user
@@ -450,7 +533,7 @@ mod tests {
     fn a_save_that_cannot_complete_leaves_the_previous_settings_intact() {
         let dir = scratch_dir();
         let path = dir.path().join("settings.toml");
-        let previous = "interval_seconds = 1200\n";
+        let previous = "throughput_every_seconds = 1200\n";
         fs::write(&path, previous).unwrap();
         fs::create_dir(scratch_path_for(&path)).unwrap();
 
@@ -468,12 +551,13 @@ mod tests {
     fn a_successful_save_replaces_the_file_and_leaves_no_scratch_behind() {
         let dir = scratch_dir();
         let path = dir.path().join("settings.toml");
-        fs::write(&path, "interval_seconds = 1200\n").unwrap();
+        fs::write(&path, "throughput_every_seconds = 1200\n").unwrap();
 
         Settings::default().save(&path).unwrap();
 
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("interval_seconds = 600"));
+        assert!(text.contains("throughput_every_seconds = 3600"));
+        assert!(text.contains("ping_every_seconds = 300"));
         assert!(!text.contains("1200"), "old content survived the rename");
         assert!(
             !scratch_path_for(&path).exists(),
@@ -515,7 +599,7 @@ mod tests {
         assert_eq!(Settings::parse(&text).unwrap(), with_budget);
 
         // Files written before this fix must keep loading.
-        let legacy = "interval_seconds = 600\ndaily_budget_bytes = none\n";
+        let legacy = "throughput_every_seconds = 600\ndaily_budget_bytes = none\n";
         assert_eq!(Settings::parse(legacy).unwrap().daily_budget_bytes, None);
     }
 }

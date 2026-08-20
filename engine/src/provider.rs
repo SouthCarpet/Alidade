@@ -3,10 +3,16 @@
 //! runner, scheduler) without a network.
 //!
 //! Every phase is **time-bounded, not byte-bounded** (spec D4): a caller
-//! hands over a wall-clock `budget` and a `max_bytes` ceiling (politeness /
-//! data-budget cap), and gets back whatever was actually moved in that
-//! window. A round costs the same wall-clock time on a 50 Mbit/s link and a
-//! 1000 Mbit/s link; only the reported `bytes` and `bits_per_sec` differ.
+//! hands over a wall-clock `budget` and gets back whatever was actually
+//! moved in that window. A round costs the same wall-clock time on a
+//! 50 Mbit/s link and a 1000 Mbit/s link; only the reported `bytes` and
+//! `bits_per_sec` differ.
+//!
+//! `max_bytes` is `Option`, and `None` — no ceiling at all — is the normal
+//! case (updated D6). The daily data budget is the only thing allowed to end
+//! a phase by byte count, and it is off by default. A ceiling that fires is
+//! never silent: the phase comes back `capped`, so a truncated measurement
+//! can never be presented as a normal one.
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,6 +42,12 @@ pub struct Throughput {
     pub bits_per_sec: f64,
     pub bytes: u64,
     pub duration: Duration,
+    /// The byte ceiling, not the clock, ended this phase. A capped phase is
+    /// a truncated measurement — it stopped early, so it carries more TCP
+    /// slow start and less steady state than the budget asked for, and its
+    /// round is marked capped all the way out to the CSV. With no ceiling
+    /// (the default) this is always `false`.
+    pub capped: bool,
 }
 
 /// Speed-test endpoint URLs. Configurable on purpose (spec / plan-header
@@ -59,13 +71,22 @@ impl Default for EndpointConfig {
 }
 
 /// A source of download/upload measurements. Implementations must honor
-/// `budget` (stop promptly once it elapses) and `max_bytes` (never move
-/// more than that in one phase) — both are politeness/data-budget limits,
-/// not targets to race toward.
+/// `budget` (stop promptly once it elapses) and `max_bytes` when it is
+/// `Some` (never move more than that in one phase, and report `capped` when
+/// that is what stopped them). `max_bytes: None` means the clock alone ends
+/// the phase — the D4/D6 default.
 #[async_trait::async_trait]
 pub trait SpeedProvider: Send + Sync {
-    async fn download(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError>;
-    async fn upload(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError>;
+    async fn download(
+        &self,
+        budget: Duration,
+        max_bytes: Option<u64>,
+    ) -> Result<Throughput, EngineError>;
+    async fn upload(
+        &self,
+        budget: Duration,
+        max_bytes: Option<u64>,
+    ) -> Result<Throughput, EngineError>;
 }
 
 /// `SpeedProvider` backed by Cloudflare's `__down`/`__up` endpoints (or any
@@ -208,14 +229,13 @@ impl SpeedProvider for CloudflareProvider {
     /// (a window dominated by TCP slow start) and leaving the rest of the
     /// round's "ping under load" running under no load at all.
     ///
-    /// `max_bytes` keeps its meaning as the phase's **total** ceiling — the
-    /// data-budget guard — not a per-request size. Note that a ceiling can
-    /// still end the phase before the budget does, and then the window is
-    /// short again for the same reason as above: with the CLI's 100 MiB and
-    /// a 10 s budget that happens on any link above ~84 Mbit/s (measured
-    /// live 2026-08-20: 165 Mbit/s filled the ceiling in 5.07 s). Choosing
-    /// those two numbers against each other is the caller's call — this
-    /// function honours whichever comes first.
+    /// `max_bytes` is the phase's **total** ceiling — the data-budget guard —
+    /// never a per-request size, and normally `None`. When it is `Some` and
+    /// it is what ends the phase, the returned `Throughput` says so
+    /// (`capped`), because a ceiling that bites also shortens the window: it
+    /// was a 100 MiB ceiling against a 10 s budget that ended the phase after
+    /// 5.07 s on a 165 Mbit/s link (measured live 2026-08-20) and left the
+    /// round's ping-under-load loop sampling an idle link.
     ///
     /// Failure policy: if the **first** request fails there is no
     /// measurement, so the error propagates (never a fake 0). If a **later**
@@ -223,19 +243,30 @@ impl SpeedProvider for CloudflareProvider {
     /// it measured: those bytes really did cross the wire in that time, and
     /// discarding a good 8 s of data because the 9th second broke would
     /// throw away the better measurement of the two.
-    async fn download(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
+    async fn download(
+        &self,
+        budget: Duration,
+        max_bytes: Option<u64>,
+    ) -> Result<Throughput, EngineError> {
         let deadline = Instant::now() + budget;
         let mut bytes_read: u64 = 0;
         // Sum of the per-chunk body-read times. Deliberately excludes each
         // chunk's header round-trip (see `Throughput::duration`).
         let mut measured = Duration::ZERO;
+        let mut capped = false;
 
         loop {
-            let bytes_left = max_bytes.saturating_sub(bytes_read);
-            if bytes_left == 0 || deadline.saturating_duration_since(Instant::now()).is_zero() {
+            let bytes_left = max_bytes.map(|max| max.saturating_sub(bytes_read));
+            if bytes_left == Some(0) {
+                capped = true;
                 break;
             }
-            let request_bytes = self.download_chunk_bytes.min(bytes_left);
+            if deadline.saturating_duration_since(Instant::now()).is_zero() {
+                break;
+            }
+            let request_bytes = bytes_left.map_or(self.download_chunk_bytes, |left| {
+                self.download_chunk_bytes.min(left)
+            });
             match self.download_chunk(request_bytes, deadline).await {
                 Ok((bytes, spent)) => {
                     bytes_read += bytes;
@@ -250,6 +281,7 @@ impl SpeedProvider for CloudflareProvider {
             bytes: bytes_read,
             duration: measured,
             bits_per_sec: bytes_read as f64 * 8.0 / measured.as_secs_f64().max(f64::EPSILON),
+            capped,
         })
     }
 
@@ -266,7 +298,11 @@ impl SpeedProvider for CloudflareProvider {
     /// caller's own choice) and never by a chunk size.
     /// `upload_is_not_capped_by_its_chunk_size` in `tests/provider.rs` holds
     /// that property.
-    async fn upload(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
+    async fn upload(
+        &self,
+        budget: Duration,
+        max_bytes: Option<u64>,
+    ) -> Result<Throughput, EngineError> {
         let deadline = Instant::now() + budget;
         let sent = Arc::new(AtomicU64::new(0));
         let stream = UploadStream {
@@ -308,17 +344,21 @@ impl SpeedProvider for CloudflareProvider {
             bytes: bytes_sent,
             duration,
             bits_per_sec: bytes_sent as f64 * 8.0 / duration.as_secs_f64().max(f64::EPSILON),
+            // The stream stops on `remaining == 0` or on the deadline; having
+            // pushed the whole ceiling is exactly the first case.
+            capped: max_bytes.is_some_and(|max| bytes_sent >= max),
         })
     }
 }
 
 /// Feeds `reqwest::Body::wrap_stream` a sequence of zero-filled chunks,
-/// stopping at `remaining == 0` (byte cap reached) or `deadline` (time
-/// budget elapsed) — whichever comes first. `sent` is read back by the
+/// stopping at `remaining == Some(0)` (byte ceiling reached) or `deadline`
+/// (time budget elapsed) — whichever comes first. `remaining: None` is the
+/// default case: only the deadline stops it. `sent` is read back by the
 /// caller after `send().await` completes to learn how much was actually
 /// handed to the HTTP layer.
 struct UploadStream {
-    remaining: u64,
+    remaining: Option<u64>,
     deadline: Instant,
     sent: Arc<AtomicU64>,
 }
@@ -328,11 +368,15 @@ impl Stream for UploadStream {
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        if this.remaining == 0 || Instant::now() >= this.deadline {
+        if this.remaining == Some(0) || Instant::now() >= this.deadline {
             return Poll::Ready(None);
         }
-        let n = (UPLOAD_CHUNK_BYTES as u64).min(this.remaining) as usize;
-        this.remaining -= n as u64;
+        let n = this.remaining.map_or(UPLOAD_CHUNK_BYTES, |left| {
+            (UPLOAD_CHUNK_BYTES as u64).min(left) as usize
+        });
+        if let Some(left) = &mut this.remaining {
+            *left -= n as u64;
+        }
         this.sent.fetch_add(n as u64, Ordering::Relaxed);
         Poll::Ready(Some(Ok(vec![0u8; n])))
     }
@@ -388,20 +432,25 @@ impl MockProvider {
         }
     }
 
-    fn synthesize(rate_bits_per_sec: f64, budget: Duration, max_bytes: u64) -> Throughput {
-        let bytes = ((rate_bits_per_sec / 8.0) * budget.as_secs_f64()).round() as u64;
-        let bytes = bytes.min(max_bytes);
+    fn synthesize(rate_bits_per_sec: f64, budget: Duration, max_bytes: Option<u64>) -> Throughput {
+        let wanted = ((rate_bits_per_sec / 8.0) * budget.as_secs_f64()).round() as u64;
+        let bytes = max_bytes.map_or(wanted, |max| wanted.min(max));
         Throughput {
             bytes,
             duration: budget,
             bits_per_sec: rate_bits_per_sec,
+            capped: max_bytes.is_some_and(|max| wanted >= max),
         }
     }
 }
 
 #[async_trait::async_trait]
 impl SpeedProvider for MockProvider {
-    async fn download(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
+    async fn download(
+        &self,
+        budget: Duration,
+        max_bytes: Option<u64>,
+    ) -> Result<Throughput, EngineError> {
         if self.fail {
             return Err(EngineError::Other("mock provider configured to fail".to_string()));
         }
@@ -411,7 +460,11 @@ impl SpeedProvider for MockProvider {
         Ok(Self::synthesize(self.down_bits_per_sec, budget, max_bytes))
     }
 
-    async fn upload(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
+    async fn upload(
+        &self,
+        budget: Duration,
+        max_bytes: Option<u64>,
+    ) -> Result<Throughput, EngineError> {
         if self.fail {
             return Err(EngineError::Other("mock provider configured to fail".to_string()));
         }

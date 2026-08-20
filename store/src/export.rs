@@ -5,8 +5,14 @@ use std::path::Path;
 
 use crate::{unix_secs, RoundRow, StoreError};
 
-const HEADER: [&str; 8] = [
+/// `mode` and `capped` are here because they change how the rest of the row
+/// must be read: a `ping` row was never asked to measure throughput, and a
+/// `capped` row's speeds are truncated by the data budget rather than
+/// measured over the full window. An export that hides either presents a
+/// short measurement as a normal one.
+const HEADER: [&str; 10] = [
     "started_at",
+    "mode",
     "down_mbps",
     "up_mbps",
     "ping_idle_ms",
@@ -14,6 +20,7 @@ const HEADER: [&str; 8] = [
     "ping_up_ms",
     "jitter_ms",
     "loss_pct",
+    "capped",
 ];
 
 /// Write `rows` to `out` with the round-export header. Returns the number
@@ -24,6 +31,7 @@ pub fn write_rounds_csv(rows: &[RoundRow], out: &Path) -> Result<usize, StoreErr
     for row in rows {
         wtr.write_record([
             format_started_at(row),
+            row.mode.as_str().to_string(),
             mbps(row.down_bps),
             mbps(row.up_bps),
             opt_f64(row.ping_idle_ms),
@@ -31,6 +39,7 @@ pub fn write_rounds_csv(rows: &[RoundRow], out: &Path) -> Result<usize, StoreErr
             opt_f64(row.ping_up_ms),
             opt_f64(row.jitter_ms),
             opt_f64(row.loss_pct),
+            row.capped.to_string(),
         ])?;
     }
     wtr.flush()?;

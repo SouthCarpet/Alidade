@@ -7,22 +7,100 @@
 //! `skipped_reason` and its slot stays `None` too, but it never aborts the
 //! rest of the round — ping keeps running even when throughput fails.
 //!
+//! A round carries its **kind** (D5a): `Full` when a throughput phase was
+//! attempted, `PingOnly` when the round is the idle-ping phase alone. The
+//! store persists it as `mode`, so a reader of one row knows whether a blank
+//! download column means "not measured" or "never asked for".
+//!
+//! The ping-under-load loop is bounded by the **actual load**, not by
+//! `phase_budget`. See `MIN_UNDER_LOAD_SAMPLES` and `LoadWindow` for why
+//! that distinction is the difference between a bufferbloat measurement and
+//! a number with the wrong sign.
+//!
 //! Only the first configured target (`RoundConfig::targets[0]`, "primary")
 //! is pinged during a round; the rest of the list is data for other engine
 //! consumers, not for this module.
 
+use std::future::Future;
 use std::time::{Duration, Instant, SystemTime};
+
+use tokio_util::sync::CancellationToken;
 
 use crate::{probe_once, stats, EngineError, PingSample, PingStats, Probe, SpeedProvider, Throughput};
 
-/// Which phases of a round actually run. Unselected metrics (and, later,
-/// an exhausted data budget) produce skip semantics: the matching slot in
+/// Fewest ping samples inside a load window that can carry an under-load
+/// figure. Below this the number is not a measurement: with one or two
+/// samples a single scheduling hiccup, one retransmit, or one probe that
+/// started before the transfer had ramped up **is** the average, with
+/// nothing to show it as an outlier. Three is the smallest count where an
+/// outlier can still be seen as one.
+///
+/// A phase under the threshold reports `None`, which reads "not enough load
+/// to measure" — the sample count and the load duration are kept in
+/// [`LoadWindow`] so that stays distinguishable from "the phase never ran".
+/// The alternative, a confident number derived from one sample of a link
+/// that was already idle, is exactly the defect this constant exists to
+/// prevent: it made two of three live rounds report latency FALLING under
+/// load.
+pub const MIN_UNDER_LOAD_SAMPLES: u32 = 3;
+
+/// Which phases of a round actually run. Unselected metrics (and an
+/// exhausted data budget) produce skip semantics: the matching slot in
 /// `RoundResult` stays `None`, it is never reported as a zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MetricSelection {
     pub download: bool,
     pub upload: bool,
     pub ping: bool,
+}
+
+/// What a round measured, structurally (spec §4 `rounds.mode`, decision
+/// D5a). `Full` ran — or at least attempted — a throughput phase; `PingOnly`
+/// is the idle-ping phase alone, the cheap cadence that runs every few
+/// minutes between hourly throughput rounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundKind {
+    Full,
+    PingOnly,
+}
+
+impl RoundKind {
+    /// Stable lowercase name: the `rounds.mode` column, the CSV cell and the
+    /// CLI all use this one spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::PingOnly => "ping",
+        }
+    }
+
+    /// Inverse of [`Self::as_str`]. `None` for anything else — an unknown
+    /// mode in a stored row is corrupt data, not a value to guess at.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "full" => Some(Self::Full),
+            "ping" => Some(Self::PingOnly),
+            _ => None,
+        }
+    }
+}
+
+/// How much load a throughput phase actually put on the link, and how much
+/// of the ping-under-load series fell inside it.
+///
+/// This exists because the under-load ping is only worth what its window is
+/// worth. A phase that ended after 4 s of a 10 s budget leaves six seconds
+/// of an idle link, and samples taken there are not "under load" however
+/// they are labelled. Recording the window makes a short one visible instead
+/// of letting it quietly poison the metric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadWindow {
+    /// Wall clock from the start of the phase to the moment the transfer
+    /// finished — the real load, not the budget it was allowed.
+    pub duration: Duration,
+    /// Ping samples that STARTED while that load was running. A sample in
+    /// flight when the load ends still counts: it was issued under load.
+    pub ping_samples: u32,
 }
 
 /// Everything one round needs. `targets[0]` (if present) is the probe
@@ -35,10 +113,17 @@ pub struct RoundConfig {
     /// How long the idle-ping phase runs before any throughput starts.
     pub idle_ping: Duration,
     /// Wall-clock budget for each throughput phase (download, upload) —
-    /// time-bounded per spec D4, never byte-bounded.
+    /// time-bounded per spec D4.
     pub phase_budget: Duration,
-    /// Hard per-phase byte ceiling, independent of `phase_budget`.
-    pub max_bytes_per_phase: u64,
+    /// Byte ceiling for the WHOLE round (download first, upload gets what is
+    /// left), or `None` for "the clock alone ends each phase".
+    ///
+    /// `None` is the default and the normal case. Per the updated D6 the
+    /// daily data budget is the only thing that may end a throughput phase
+    /// by byte count, so the only honest source for a `Some` here is what is
+    /// left of that budget. An unconditional ceiling truncates the phase on
+    /// any fast link and takes the ping-under-load window down with it.
+    pub byte_ceiling: Option<u64>,
     /// Cadence of ping samples during the idle and ping-under-load phases.
     pub ping_interval: Duration,
     /// Ping targets for the round; only the first (primary) is used.
@@ -49,15 +134,27 @@ pub struct RoundConfig {
 /// selected or the provider errored (see `skipped_reason`). `ping_idle` is
 /// `None` only when ping was not selected (or had no target); `ping_down`/
 /// `ping_up` are additionally `None` when their throughput phase did not
-/// run.
+/// run **or** when its load window held fewer than
+/// [`MIN_UNDER_LOAD_SAMPLES`] samples — `down_load`/`up_load` tell the two
+/// apart.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoundResult {
     pub started_at: SystemTime,
+    pub kind: RoundKind,
     pub down: Option<Throughput>,
     pub up: Option<Throughput>,
     pub ping_idle: Option<PingStats>,
     pub ping_down: Option<PingStats>,
     pub ping_up: Option<PingStats>,
+    /// The load window of the download phase; `None` if that phase did not
+    /// run at all.
+    pub down_load: Option<LoadWindow>,
+    /// The load window of the upload phase; `None` if that phase did not run.
+    pub up_load: Option<LoadWindow>,
+    /// A byte ceiling — the daily data budget — ended a throughput phase.
+    /// The round's speeds are then a truncated measurement and must be
+    /// presented as such, never as a normal round.
+    pub capped: bool,
     pub skipped_reason: Option<String>,
 }
 
@@ -82,58 +179,78 @@ pub async fn run_round(provider: &dyn SpeedProvider, cfg: &RoundConfig) -> Round
 
     // Idle ping: baseline latency measured before any throughput phase
     // starts, so it is never inflated by a phase competing for bandwidth.
+    // Nothing can end this phase early, so it gets a token nobody cancels.
     let ping_idle = match primary_target {
-        Some(target) => Some(run_ping_loop(target, cfg.ping_interval, cfg.idle_ping).await),
+        Some(target) => Some(
+            run_ping_loop(
+                target,
+                cfg.ping_interval,
+                cfg.idle_ping,
+                &CancellationToken::new(),
+            )
+            .await,
+        ),
         None => None,
     };
 
-    // Download, with ping running concurrently when both are selected —
-    // `tokio::join!` keeps the two time-aligned within the same phase
-    // window (spec D4).
-    let (down, ping_down) = if cfg.metrics.download {
-        match primary_target {
-            Some(target) => {
-                let (result, ping) = tokio::join!(
-                    provider.download(cfg.phase_budget, cfg.max_bytes_per_phase),
-                    run_ping_loop(target, cfg.ping_interval, cfg.phase_budget),
-                );
-                (throughput_or_skip(result, &mut skip_reasons), Some(ping))
-            }
-            None => {
-                let result = provider.download(cfg.phase_budget, cfg.max_bytes_per_phase).await;
-                (throughput_or_skip(result, &mut skip_reasons), None)
-            }
-        }
+    // Download, with ping running concurrently and bounded by the download
+    // itself — the moment the transfer ends, the ping loop ends with it.
+    let (down, ping_down, down_load) = if cfg.metrics.download {
+        let (result, ping, window) = run_loaded_phase(
+            provider.download(cfg.phase_budget, cfg.byte_ceiling),
+            primary_target,
+            cfg.ping_interval,
+            cfg.phase_budget,
+        )
+        .await;
+        (
+            throughput_or_skip(result, &mut skip_reasons),
+            ping,
+            Some(window),
+        )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
+    // Whatever the download already spent comes off the round's ceiling, so
+    // a round can never move more than the daily budget had left.
+    let upload_ceiling = cfg
+        .byte_ceiling
+        .map(|ceiling| ceiling.saturating_sub(down.map_or(0, |t| t.bytes)));
+
     // Upload — same shape as download.
-    let (up, ping_up) = if cfg.metrics.upload {
-        match primary_target {
-            Some(target) => {
-                let (result, ping) = tokio::join!(
-                    provider.upload(cfg.phase_budget, cfg.max_bytes_per_phase),
-                    run_ping_loop(target, cfg.ping_interval, cfg.phase_budget),
-                );
-                (throughput_or_skip(result, &mut skip_reasons), Some(ping))
-            }
-            None => {
-                let result = provider.upload(cfg.phase_budget, cfg.max_bytes_per_phase).await;
-                (throughput_or_skip(result, &mut skip_reasons), None)
-            }
-        }
+    let (up, ping_up, up_load) = if cfg.metrics.upload {
+        let (result, ping, window) = run_loaded_phase(
+            provider.upload(cfg.phase_budget, upload_ceiling),
+            primary_target,
+            cfg.ping_interval,
+            cfg.phase_budget,
+        )
+        .await;
+        (
+            throughput_or_skip(result, &mut skip_reasons),
+            ping,
+            Some(window),
+        )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     RoundResult {
         started_at,
+        kind: if cfg.metrics.download || cfg.metrics.upload {
+            RoundKind::Full
+        } else {
+            RoundKind::PingOnly
+        },
         down,
         up,
         ping_idle,
         ping_down,
         ping_up,
+        down_load,
+        up_load,
+        capped: down.is_some_and(|t| t.capped) || up.is_some_and(|t| t.capped),
         skipped_reason: if skip_reasons.is_empty() {
             None
         } else {
@@ -158,23 +275,92 @@ fn throughput_or_skip(
     }
 }
 
-/// Probe `target` every `ping_interval` until `phase_duration` has
-/// elapsed (at least one sample always runs, even for a near-zero
-/// duration). Loss is data, not an error — see `probe_once` — so this
-/// never fails; it always returns real `PingStats`.
+/// Run one throughput phase with the ping loop alongside it, and stop that
+/// loop when the transfer stops.
+///
+/// This is F2, and it is a correctness fix rather than a tuning one. The
+/// loop used to run for the whole `phase_budget` regardless of when the
+/// transfer finished, so on a fast link most of its samples measured an idle
+/// link and were stored as "under load". Two of three live rounds then
+/// reported latency *falling* under load — physically impossible, and the
+/// wrong sign on one of the app's two headline metrics.
+///
+/// `phase_budget` stays as the upper bound: it is what the transfer itself
+/// is allowed, so a ping loop that outlived it would be sampling nothing
+/// either way.
+///
+/// Returns the phase result, the under-load stats (already subject to
+/// [`MIN_UNDER_LOAD_SAMPLES`]) and the [`LoadWindow`] that produced them.
+async fn run_loaded_phase<F>(
+    phase: F,
+    target: Option<&Probe>,
+    ping_interval: Duration,
+    phase_budget: Duration,
+) -> (
+    Result<Throughput, EngineError>,
+    Option<PingStats>,
+    LoadWindow,
+)
+where
+    F: Future<Output = Result<Throughput, EngineError>>,
+{
+    let load_ended = CancellationToken::new();
+    let started = Instant::now();
+
+    let Some(target) = target else {
+        let result = phase.await;
+        return (
+            result,
+            None,
+            LoadWindow {
+                duration: started.elapsed(),
+                ping_samples: 0,
+            },
+        );
+    };
+
+    // `tokio::join!` keeps the transfer and the ping series time-aligned
+    // inside the same window (spec D4); the token closes that window on the
+    // transfer's terms.
+    let ((result, load_duration), ping) = tokio::join!(
+        async {
+            let result = phase.await;
+            let load_duration = started.elapsed();
+            load_ended.cancel();
+            (result, load_duration)
+        },
+        run_ping_loop(target, ping_interval, phase_budget, &load_ended),
+    );
+
+    let window = LoadWindow {
+        duration: load_duration,
+        ping_samples: ping.sent,
+    };
+    let under_load = (window.ping_samples >= MIN_UNDER_LOAD_SAMPLES).then_some(ping);
+    (result, under_load, window)
+}
+
+/// Probe `target` every `ping_interval` until `max_duration` has elapsed or
+/// `stop` is cancelled, whichever comes first (at least one sample always
+/// runs, even for a near-zero duration). Loss is data, not an error — see
+/// `probe_once` — so this never fails; it always returns real `PingStats`.
 async fn run_ping_loop(
     target: &Probe,
     ping_interval: Duration,
-    phase_duration: Duration,
+    max_duration: Duration,
+    stop: &CancellationToken,
 ) -> PingStats {
     let mut samples: Vec<PingSample> = Vec::new();
-    let deadline = Instant::now() + phase_duration;
+    let deadline = Instant::now() + max_duration;
     loop {
         samples.push(probe_once(target, ping_interval).await);
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline || stop.is_cancelled() {
             break;
         }
-        tokio::time::sleep(ping_interval).await;
+        tokio::select! {
+            _ = tokio::time::sleep(ping_interval) => {}
+            _ = stop.cancelled() => break,
+        }
     }
     stats(&samples)
 }

@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use alidade_engine::{
-    probe_once, run_round, CloudflareProvider, MetricSelection, PingStats, Probe, Scheduler,
-    Settings,
+    probe_once, run_round, CloudflareProvider, LoadWindow, MetricSelection, PingStats, Probe,
+    RoundKind, Scheduler, Settings,
 };
 use alidade_store::Store;
 use chrono::{NaiveDate, TimeZone, Utc};
@@ -15,13 +15,17 @@ use clap::{Args, Parser, Subcommand};
 const IDLE_PING: Duration = Duration::from_secs(3);
 const PHASE_BUDGET: Duration = Duration::from_secs(10);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
-/// Ceiling on the bytes ONE round phase may move — the politeness and
-/// data-budget guard, not a request size. The provider splits it into
-/// server-legal requests (see `alidade_engine::DOWNLOAD_CHUNK_BYTES`).
-const MAX_BYTES_PER_PHASE: u64 = 100 * 1024 * 1024;
 
 /// Last second of a UTC day, added to a `--to` date so the whole day counts.
 const LAST_SECOND_OF_DAY: u64 = 86_400 - 1;
+
+/// `--interval` was one cadence; continuous mode has two now (D5a). Mapping
+/// it onto either would leave the other at its default and quietly change
+/// what the user asked for, so the flag is an error that names both
+/// replacements instead.
+const INTERVAL_REPLACED: &str = "--interval is gone: continuous mode runs two cadences now. \
+     Use --throughput-every <DURATION> for full rounds (default 1h) and \
+     --ping-every <DURATION> for ping-only rounds (default 5m).";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -44,13 +48,28 @@ enum Command {
         #[command(flatten)]
         metrics: MetricArgs,
     },
-    /// Run a round every interval until stopped with Ctrl+C.
+    /// Run both cadences until stopped with Ctrl+C: full rounds every
+    /// `--throughput-every`, ping-only rounds every `--ping-every`.
     Continuous {
         #[command(flatten)]
         metrics: MetricArgs,
-        /// Gap between round starts, e.g. 90s, 10m, 6h. Minimum 1 minute.
+        /// Gap between full round starts, e.g. 30m, 1h, 6h. Minimum 1 minute.
         #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
-        interval: Option<Duration>,
+        throughput_every: Option<Duration>,
+        /// Gap between ping-only round starts, e.g. 60s, 5m. Minimum 1 minute.
+        #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+        ping_every: Option<Duration>,
+        /// Removed — see `INTERVAL_REPLACED`. Kept as a hidden argument so
+        /// the old flag gets an answer that names its replacements instead of
+        /// clap's generic "unexpected argument".
+        #[arg(
+            long,
+            hide = true,
+            num_args = 0..=1,
+            default_missing_value = "",
+            value_name = "DURATION"
+        )]
+        interval: Option<String>,
     },
     /// Ping one configured target once a second and print each answer.
     ///
@@ -109,8 +128,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Single { metrics } => {
             run_and_store(&settings, metrics_for(&settings, &metrics)).await?
         }
-        Command::Continuous { metrics, interval } => {
-            continuous(settings, metrics, interval).await?
+        Command::Continuous {
+            metrics,
+            throughput_every,
+            ping_every,
+            interval,
+        } => {
+            if interval.is_some() {
+                return Err(INTERVAL_REPLACED.into());
+            }
+            continuous(settings, metrics, throughput_every, ping_every).await?
         }
         Command::PingMonitor { target, seconds } => ping_monitor(&settings, &target, seconds).await,
         Command::Export { from, to, out } => export(&from, &to, &out)?,
@@ -119,12 +146,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// A one-shot round is never byte-capped: the daily budget governs the
+/// unattended cadence, and truncating a test the user asked for by hand would
+/// hand them the short window this release exists to remove.
 async fn run_and_store(
     settings: &Settings,
     metrics: MetricSelection,
 ) -> Result<(), Box<dyn Error>> {
     let provider = CloudflareProvider::new(settings.endpoints.clone());
-    let result = run_round(&provider, &round_config(settings, metrics)).await;
+    let result = run_round(&provider, &round_config(settings, metrics, None)).await;
     let store = open_store()?;
     store.insert_round(&result)?;
     print_round(&result);
@@ -134,22 +164,32 @@ async fn run_and_store(
 async fn continuous(
     mut settings: Settings,
     metric_args: MetricArgs,
-    interval: Option<Duration>,
+    throughput_every: Option<Duration>,
+    ping_every: Option<Duration>,
 ) -> Result<(), Box<dyn Error>> {
-    if let Some(interval) = interval {
-        settings.interval = interval;
+    if let Some(every) = throughput_every {
+        settings.throughput_every = every;
+    }
+    if let Some(every) = ping_every {
+        settings.ping_every = every;
     }
     let scheduler = Scheduler::new(settings.clone());
     // One connection for the whole run: re-opening the database every round
     // re-ran the migration check and re-took the file lock for no gain.
     let store = open_store()?;
-    println!("continuous mode; press Ctrl+C to stop");
+    println!(
+        "continuous mode; full round every {}, ping-only round every {}; press Ctrl+C to stop",
+        format_duration(settings.throughput_every),
+        format_duration(settings.ping_every)
+    );
     loop {
-        let plan = scheduler.plan_next_round();
-        scheduler.record_round_start(SystemTime::now());
+        let started = SystemTime::now();
+        let plan = scheduler.plan_next_round(started);
+        scheduler.record_round_start(started, plan.kind);
         let metrics = intersect_metrics(plan.metrics, metrics_for(&settings, &metric_args));
         let provider = CloudflareProvider::new(settings.endpoints.clone());
-        let mut result = run_round(&provider, &round_config(&settings, metrics)).await;
+        let mut result =
+            run_round(&provider, &round_config(&settings, metrics, plan.byte_ceiling)).await;
         if result.skipped_reason.is_none() {
             result.skipped_reason = plan.skip_reason;
         }
@@ -157,7 +197,7 @@ async fn continuous(
             .down
             .map_or(0, |throughput| throughput.bytes)
             .saturating_add(result.up.map_or(0, |throughput| throughput.bytes));
-        scheduler.record_bytes(bytes);
+        scheduler.record_bytes(started, bytes);
         store.insert_round(&result)?;
         print_round(&result);
         let now = SystemTime::now();
@@ -212,12 +252,16 @@ fn export(from: &str, to: &str, out: &std::path::Path) -> Result<(), Box<dyn Err
     Ok(())
 }
 
-fn round_config(settings: &Settings, metrics: MetricSelection) -> alidade_engine::RoundConfig {
+fn round_config(
+    settings: &Settings,
+    metrics: MetricSelection,
+    byte_ceiling: Option<u64>,
+) -> alidade_engine::RoundConfig {
     alidade_engine::RoundConfig {
         metrics,
         idle_ping: IDLE_PING,
         phase_budget: PHASE_BUDGET,
-        max_bytes_per_phase: MAX_BYTES_PER_PHASE,
+        byte_ceiling,
         ping_interval: PING_INTERVAL,
         targets: settings
             .targets
@@ -252,22 +296,39 @@ fn intersect_metrics(left: MetricSelection, right: MetricSelection) -> MetricSel
     }
 }
 
+/// A ping-only round has no throughput to report and must not be printed as
+/// a full round with two skipped phases; a capped round must not be printed
+/// as an ordinary one, because its speeds came from a window the data budget
+/// cut short.
 fn print_round(result: &alidade_engine::RoundResult) {
-    let down = result.down.map_or_else(
-        || "skipped".to_string(),
-        |t| format!("{:.2} Mbit/s", t.bits_per_sec / 1_000_000.0),
-    );
-    let up = result.up.map_or_else(
-        || "skipped".to_string(),
-        |t| format!("{:.2} Mbit/s", t.bits_per_sec / 1_000_000.0),
-    );
-    println!(
-        "download: {down}; upload: {up}; idle ping: {}",
-        format_ping(result.ping_idle)
-    );
+    if result.kind == RoundKind::PingOnly {
+        println!("ping-only round; ping: {}", format_ping(result.ping_idle));
+    } else {
+        let down = format_speed(result.down);
+        let up = format_speed(result.up);
+        println!(
+            "download: {down}; upload: {up}; idle ping: {}",
+            format_ping(result.ping_idle)
+        );
+        println!(
+            "ping under load: download {}; upload {}",
+            format_under_load(result.ping_down, result.down_load),
+            format_under_load(result.ping_up, result.up_load)
+        );
+    }
+    if result.capped {
+        println!("capped: the daily data budget, not the clock, ended a throughput phase");
+    }
     if let Some(reason) = &result.skipped_reason {
         println!("skip reason: {reason}");
     }
+}
+
+fn format_speed(throughput: Option<alidade_engine::Throughput>) -> String {
+    throughput.map_or_else(
+        || "skipped".to_string(),
+        |t| format!("{:.2} Mbit/s", t.bits_per_sec / 1_000_000.0),
+    )
 }
 
 /// A phase where nothing answered has no RTT to print. Saying `0.0 ms` there
@@ -279,6 +340,35 @@ fn format_ping(stats: Option<PingStats>) -> String {
             Some(avg_ms) => format!("{avg_ms:.1} ms"),
             None => format!("no answer ({:.0}% loss)", stats.loss_pct),
         },
+    }
+}
+
+/// Under-load ping, with the two reasons for an absent number kept apart: the
+/// phase never ran, or it ran with too little load behind it to mean
+/// anything (see `MIN_UNDER_LOAD_SAMPLES`). Printing both as `skipped` would
+/// hide exactly the case this release is about.
+fn format_under_load(stats: Option<PingStats>, window: Option<LoadWindow>) -> String {
+    match (stats, window) {
+        (Some(stats), _) => format_ping(Some(stats)),
+        (None, Some(window)) => format!(
+            "not enough load to measure ({} sample(s) in {:.1}s of load)",
+            window.ping_samples,
+            window.duration.as_secs_f64()
+        ),
+        (None, None) => "skipped".to_string(),
+    }
+}
+
+/// Cadence as the user writes it (`1h`, `5m`, `90s`) — the same spelling
+/// `parse_duration` accepts, so the line can be pasted back as a flag.
+fn format_duration(value: Duration) -> String {
+    let seconds = value.as_secs();
+    if seconds.is_multiple_of(3600) {
+        format!("{}h", seconds / 3600)
+    } else if seconds.is_multiple_of(60) {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{seconds}s")
     }
 }
 
@@ -309,19 +399,19 @@ fn open_store() -> Result<Store, Box<dyn Error>> {
 fn parse_duration(value: &str) -> Result<Duration, String> {
     let split = value
         .find(|character: char| !character.is_ascii_digit())
-        .ok_or_else(|| "interval needs a unit (s, m, or h)".to_string())?;
+        .ok_or_else(|| "cadence needs a unit (s, m, or h)".to_string())?;
     let (number, unit) = value.split_at(split);
     let quantity: u64 = number
         .parse()
-        .map_err(|_| "interval must start with a whole number".to_string())?;
+        .map_err(|_| "cadence must start with a whole number".to_string())?;
     let seconds = match unit {
         "s" => quantity,
         "m" => quantity.saturating_mul(60),
         "h" => quantity.saturating_mul(3600),
-        _ => return Err("interval unit must be s, m, or h".to_string()),
+        _ => return Err("cadence unit must be s, m, or h".to_string()),
     };
-    if seconds < 60 {
-        return Err("interval must be at least 1 minute".to_string());
+    if Duration::from_secs(seconds) < alidade_engine::MIN_CADENCE {
+        return Err("cadence must be at least 1 minute".to_string());
     }
     Ok(Duration::from_secs(seconds))
 }
@@ -416,7 +506,7 @@ mod tests {
     fn every_command_name_from_the_first_release_still_parses() {
         for argv in [
             vec!["alidade", "single"],
-            vec!["alidade", "continuous", "--interval", "10m"],
+            vec!["alidade", "continuous", "--throughput-every", "1h"],
             vec!["alidade", "export", "--from", "2026-08-01", "--to", "2026-08-20", "--out", "r.csv"],
             vec!["alidade", "probe-targets"],
         ] {
@@ -425,9 +515,90 @@ mod tests {
     }
 
     #[test]
-    fn an_interval_under_a_minute_is_refused() {
-        assert!(Cli::try_parse_from(["alidade", "continuous", "--interval", "30s"]).is_err());
-        assert!(Cli::try_parse_from(["alidade", "continuous", "--interval", "10"]).is_err());
+    fn a_cadence_under_a_minute_is_refused_on_either_flag() {
+        assert!(Cli::try_parse_from(["alidade", "continuous", "--throughput-every", "30s"]).is_err());
+        assert!(Cli::try_parse_from(["alidade", "continuous", "--ping-every", "30s"]).is_err());
+        assert!(Cli::try_parse_from(["alidade", "continuous", "--ping-every", "10"]).is_err());
+    }
+
+    /// F4. Both cadences are settable and independent — the point of D5a is
+    /// that a dense ping cadence no longer drags the expensive throughput
+    /// round along with it.
+    #[test]
+    fn continuous_takes_both_cadences_independently() {
+        let parsed =
+            Cli::try_parse_from(["alidade", "continuous", "--throughput-every", "2h", "--ping-every", "60s"])
+                .unwrap();
+        match parsed.command {
+            Command::Continuous {
+                throughput_every,
+                ping_every,
+                interval,
+                ..
+            } => {
+                assert_eq!(throughput_every, Some(Duration::from_secs(7200)));
+                assert_eq!(ping_every, Some(Duration::from_secs(60)));
+                assert_eq!(interval, None);
+            }
+            other => panic!("expected continuous, got {other:?}"),
+        }
+    }
+
+    /// `--interval` used to mean the one cadence. Accepting it silently would
+    /// set the throughput cadence and leave ping at five minutes, or the
+    /// reverse — either way the user gets a schedule they did not ask for. It
+    /// parses (so the message is ours, not clap's "unexpected argument") and
+    /// then refuses, naming both replacements.
+    #[test]
+    fn the_old_interval_flag_is_refused_and_names_its_replacements() {
+        for argv in [
+            vec!["alidade", "continuous", "--interval", "10m"],
+            vec!["alidade", "continuous", "--interval"],
+        ] {
+            let parsed = Cli::try_parse_from(&argv).unwrap();
+            match parsed.command {
+                Command::Continuous { interval, .. } => assert!(
+                    interval.is_some(),
+                    "{argv:?} must reach the guard, not be silently dropped"
+                ),
+                other => panic!("expected continuous, got {other:?}"),
+            }
+        }
+        assert!(INTERVAL_REPLACED.contains("--throughput-every"));
+        assert!(INTERVAL_REPLACED.contains("--ping-every"));
+    }
+
+    /// F4's print rule, at the level a unit test can hold it: an under-load
+    /// ping that is absent because the load was too short must not read the
+    /// same as one that never ran.
+    #[test]
+    fn an_absent_under_load_ping_says_which_kind_of_absent_it_is() {
+        let no_phase = format_under_load(None, None);
+        let too_little_load = format_under_load(
+            None,
+            Some(LoadWindow {
+                duration: Duration::from_millis(4300),
+                ping_samples: 2,
+            }),
+        );
+        assert_eq!(no_phase, "skipped");
+        assert!(
+            too_little_load.contains("not enough load") && too_little_load.contains("2 sample"),
+            "{too_little_load}"
+        );
+        assert_ne!(no_phase, too_little_load);
+    }
+
+    #[test]
+    fn a_cadence_prints_in_the_units_its_flag_accepts() {
+        for (value, text) in [
+            (Duration::from_secs(3600), "1h"),
+            (Duration::from_secs(300), "5m"),
+            (Duration::from_secs(90), "90s"),
+        ] {
+            assert_eq!(format_duration(value), text);
+            assert_eq!(parse_duration(text).unwrap(), value);
+        }
     }
 
     /// The `--to` boundary: the last round of the named day is inside the

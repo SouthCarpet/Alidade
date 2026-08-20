@@ -8,7 +8,7 @@ mod schema;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use alidade_engine::{PingSample, PingStats, RoundResult, Throughput};
+use alidade_engine::{LoadWindow, PingSample, PingStats, RoundKind, RoundResult, Throughput};
 use rusqlite::{params, Connection, Row};
 
 /// Errors from opening, migrating, querying, or exporting the store.
@@ -24,6 +24,8 @@ pub enum StoreError {
     InvalidTime,
     #[error("database schema version {0} is newer than this crate supports")]
     UnsupportedSchema(i32),
+    #[error("stored round mode `{0}` is not a round kind this crate knows")]
+    UnknownRoundMode(String),
 }
 
 /// One persisted round, as stored (speeds in bits/s, times in ms).
@@ -35,6 +37,11 @@ pub enum StoreError {
 pub struct RoundRow {
     pub id: i64,
     pub started_at: SystemTime,
+    /// Which cadence produced this round (`rounds.mode`). A `PingOnly` row
+    /// has no throughput because none was asked for; a `Full` row with empty
+    /// speeds was asked and failed or was skipped — `skipped_reason` says
+    /// which.
+    pub mode: RoundKind,
     pub down_bps: Option<f64>,
     pub up_bps: Option<f64>,
     pub ping_idle_ms: Option<f64>,
@@ -50,6 +57,20 @@ pub struct RoundRow {
     pub loss_up_pct: Option<f64>,
     pub bytes_down: i64,
     pub bytes_up: i64,
+    /// How long the download load actually lasted, in ms — what
+    /// `ping_down_ms` was measured against. NULL on rounds stored before the
+    /// window was recorded.
+    pub load_down_ms: Option<f64>,
+    pub load_up_ms: Option<f64>,
+    /// Ping samples taken inside that load. Fewer than
+    /// `MIN_UNDER_LOAD_SAMPLES` means the matching `ping_*_ms` is NULL
+    /// because there was not enough load to measure — not because nothing
+    /// ran.
+    pub ping_down_samples: Option<i64>,
+    pub ping_up_samples: Option<i64>,
+    /// A byte ceiling ended a throughput phase, so the speeds in this row are
+    /// a truncated measurement.
+    pub capped: bool,
     pub skipped_reason: Option<String>,
 }
 
@@ -102,16 +123,20 @@ impl Store {
         let started_at = unix_secs(r.started_at)?;
         let mut stmt = self.conn.prepare(
             "INSERT INTO rounds (
-                 started_at, down_bps, up_bps,
+                 started_at, mode, down_bps, up_bps,
                  ping_idle_ms, ping_down_ms, ping_up_ms,
                  jitter_ms, loss_pct,
                  jitter_idle_ms, jitter_down_ms, jitter_up_ms,
                  loss_idle_pct, loss_down_pct, loss_up_pct,
-                 bytes_down, bytes_up, skipped_reason
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 bytes_down, bytes_up,
+                 load_down_ms, load_up_ms, ping_down_samples, ping_up_samples,
+                 capped, skipped_reason
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                       ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
         )?;
         let id = stmt.insert(params![
             started_at,
+            r.kind.as_str(),
             r.down.map(|t| t.bits_per_sec),
             r.up.map(|t| t.bits_per_sec),
             ping_avg(r.ping_idle),
@@ -127,6 +152,11 @@ impl Store {
             r.ping_up.map(|p| p.loss_pct),
             bytes_or_zero(r.down),
             bytes_or_zero(r.up),
+            load_ms(r.down_load),
+            load_ms(r.up_load),
+            load_samples(r.down_load),
+            load_samples(r.up_load),
+            r.capped,
             r.skipped_reason.as_deref(),
         ])?;
         Ok(id)
@@ -159,12 +189,14 @@ impl Store {
         let from_secs = unix_secs(from)?;
         let to_secs = unix_secs(to)?;
         let mut stmt = self.conn.prepare(
-            "SELECT id, started_at, down_bps, up_bps,
+            "SELECT id, started_at, mode, down_bps, up_bps,
                     ping_idle_ms, ping_down_ms, ping_up_ms,
                     jitter_ms, loss_pct,
                     jitter_idle_ms, jitter_down_ms, jitter_up_ms,
                     loss_idle_pct, loss_down_pct, loss_up_pct,
-                    bytes_down, bytes_up, skipped_reason
+                    bytes_down, bytes_up,
+                    load_down_ms, load_up_ms, ping_down_samples, ping_up_samples,
+                    capped, skipped_reason
              FROM rounds
              WHERE started_at >= ?1 AND started_at <= ?2
              ORDER BY started_at ASC, id ASC",
@@ -303,6 +335,16 @@ fn bytes_or_zero(t: Option<Throughput>) -> i64 {
     t.map(|t| t.bytes as i64).unwrap_or(0)
 }
 
+/// How long the load actually lasted, in ms. NULL when the phase did not run
+/// — the same distinction the `ping_*_ms` columns need to stay readable.
+fn load_ms(window: Option<LoadWindow>) -> Option<f64> {
+    window.map(|w| w.duration.as_secs_f64() * 1000.0)
+}
+
+fn load_samples(window: Option<LoadWindow>) -> Option<i64> {
+    window.map(|w| i64::from(w.ping_samples))
+}
+
 fn metric_agg(row: &Row<'_>, start: usize) -> rusqlite::Result<MetricAgg> {
     Ok(MetricAgg {
         avg: row.get(start)?,
@@ -320,24 +362,40 @@ fn row_to_round(row: &Row<'_>) -> rusqlite::Result<RoundRow> {
             Box::new(e),
         )
     })?;
+    let mode_text: String = row.get(2)?;
+    // An unrecognised mode is corrupt data. Defaulting it to `full` would
+    // silently claim a throughput measurement that may never have happened.
+    let mode = RoundKind::from_name(&mode_text).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(StoreError::UnknownRoundMode(mode_text.clone())),
+        )
+    })?;
     Ok(RoundRow {
         id: row.get(0)?,
         started_at,
-        down_bps: row.get(2)?,
-        up_bps: row.get(3)?,
-        ping_idle_ms: row.get(4)?,
-        ping_down_ms: row.get(5)?,
-        ping_up_ms: row.get(6)?,
-        jitter_ms: row.get(7)?,
-        loss_pct: row.get(8)?,
-        jitter_idle_ms: row.get(9)?,
-        jitter_down_ms: row.get(10)?,
-        jitter_up_ms: row.get(11)?,
-        loss_idle_pct: row.get(12)?,
-        loss_down_pct: row.get(13)?,
-        loss_up_pct: row.get(14)?,
-        bytes_down: row.get(15)?,
-        bytes_up: row.get(16)?,
-        skipped_reason: row.get(17)?,
+        mode,
+        down_bps: row.get(3)?,
+        up_bps: row.get(4)?,
+        ping_idle_ms: row.get(5)?,
+        ping_down_ms: row.get(6)?,
+        ping_up_ms: row.get(7)?,
+        jitter_ms: row.get(8)?,
+        loss_pct: row.get(9)?,
+        jitter_idle_ms: row.get(10)?,
+        jitter_down_ms: row.get(11)?,
+        jitter_up_ms: row.get(12)?,
+        loss_idle_pct: row.get(13)?,
+        loss_down_pct: row.get(14)?,
+        loss_up_pct: row.get(15)?,
+        bytes_down: row.get(16)?,
+        bytes_up: row.get(17)?,
+        load_down_ms: row.get(18)?,
+        load_up_ms: row.get(19)?,
+        ping_down_samples: row.get(20)?,
+        ping_up_samples: row.get(21)?,
+        capped: row.get(22)?,
+        skipped_reason: row.get(23)?,
     })
 }
