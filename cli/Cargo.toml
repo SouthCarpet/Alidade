@@ -6,3 +6,9 @@ edition = "2021"
 [[bin]]
 name = "alidade"
 path = "src/main.rs"
+
+[dependencies]
+alidade-engine = { path = "../engine" }
+alidade-store = { path = "../store" }
+chrono = { version = "0.4.41", default-features = false, features = ["std"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "time"] }
