@@ -53,7 +53,36 @@ fn open_creates_schema_and_is_idempotent() {
 fn round_roundtrips_with_null_metrics_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open(&dir.path().join("a.db")).unwrap();
-    let r = round_with(Some(some_down()), None, Some(some_idle_ping()));
+    let r = RoundResult {
+        started_at: SystemTime::now(),
+        down: Some(some_down()),
+        up: None,
+        ping_idle: Some(PingStats {
+            avg_ms: 12.0,
+            min_ms: 10.0,
+            max_ms: 15.0,
+            jitter_ms: 1.5,
+            loss_pct: 0.0,
+            sent: 5,
+        }),
+        ping_down: Some(PingStats {
+            avg_ms: 40.0,
+            min_ms: 20.0,
+            max_ms: 80.0,
+            jitter_ms: 12.0,
+            loss_pct: 2.5,
+            sent: 8,
+        }),
+        ping_up: Some(PingStats {
+            avg_ms: 30.0,
+            min_ms: 15.0,
+            max_ms: 60.0,
+            jitter_ms: 8.0,
+            loss_pct: 5.0,
+            sent: 8,
+        }),
+        skipped_reason: None,
+    };
     let id = s.insert_round(&r).unwrap();
     assert!(id > 0);
     let rows = s
@@ -61,6 +90,23 @@ fn round_roundtrips_with_null_metrics_preserved() {
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert!(rows[0].down_bps.is_some() && rows[0].up_bps.is_none());
+    // Per-phase jitter/loss is the bufferbloat signal: idle vs under-load
+    // must survive storage as six distinct values, not collapse to idle.
+    assert_eq!(rows[0].jitter_idle_ms, Some(1.5));
+    assert_eq!(rows[0].jitter_down_ms, Some(12.0));
+    assert_eq!(rows[0].jitter_up_ms, Some(8.0));
+    assert_eq!(rows[0].loss_idle_pct, Some(0.0));
+    assert_eq!(rows[0].loss_down_pct, Some(2.5));
+    assert_eq!(rows[0].loss_up_pct, Some(5.0));
+    assert_ne!(rows[0].jitter_idle_ms, rows[0].jitter_down_ms);
+    assert_ne!(rows[0].jitter_idle_ms, rows[0].jitter_up_ms);
+    assert_ne!(rows[0].jitter_down_ms, rows[0].jitter_up_ms);
+    assert_ne!(rows[0].loss_idle_pct, rows[0].loss_down_pct);
+    assert_ne!(rows[0].loss_idle_pct, rows[0].loss_up_pct);
+    assert_ne!(rows[0].loss_down_pct, rows[0].loss_up_pct);
+    // CSV aliases stay the idle baseline.
+    assert_eq!(rows[0].jitter_ms, rows[0].jitter_idle_ms);
+    assert_eq!(rows[0].loss_pct, rows[0].loss_idle_pct);
 }
 
 #[test]
@@ -80,6 +126,66 @@ fn downsample_collapses_raw_samples_into_minutes_and_deletes_them() {
     assert!(moved >= 1, "at least one minute row");
     // raw rows for that period are gone
     assert_eq!(s.ping_sample_count().unwrap(), 0);
+}
+
+/// Samples in one minute that straddle the retention cutoff. Without flooring
+/// the cutoff to a minute boundary, the first run aggregates only the samples
+/// before cutoff and the second run's ON CONFLICT overwrite discards them.
+#[test]
+fn downsample_keeps_whole_minute_across_repeated_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(&dir.path().join("a.db")).unwrap();
+
+    // Minute-aligned unix second. Five samples: three in the first half of
+    // the minute (10ms, 20ms, loss) and two in the second half (100ms, 200ms).
+    const T0: u64 = 1_700_000_040;
+    const RETENTION_DAYS: u32 = 30;
+    let minute_start = SystemTime::UNIX_EPOCH + Duration::from_secs(T0);
+    let samples = vec![
+        PingSample {
+            at: minute_start,
+            rtt: Some(Duration::from_millis(10)),
+        },
+        PingSample {
+            at: minute_start + Duration::from_secs(10),
+            rtt: Some(Duration::from_millis(20)),
+        },
+        PingSample {
+            at: minute_start + Duration::from_secs(20),
+            rtt: None,
+        },
+        PingSample {
+            at: minute_start + Duration::from_secs(40),
+            rtt: Some(Duration::from_millis(100)),
+        },
+        PingSample {
+            at: minute_start + Duration::from_secs(50),
+            rtt: Some(Duration::from_millis(200)),
+        },
+    ];
+    s.insert_ping_samples("google", &samples).unwrap();
+
+    // now such that raw cutoff = T0 + 30, which sits inside the minute.
+    let retention = u64::from(RETENTION_DAYS) * 86_400;
+    let now1 = SystemTime::UNIX_EPOCH + Duration::from_secs(T0 + 30 + retention);
+    s.downsample_pings_at(now1, RETENTION_DAYS).unwrap();
+
+    // Advance the clock so the leftover samples in this minute become
+    // eligible. Without the whole-minute cutoff, this overwrites the
+    // ping_minute row with only the second-half contribution.
+    let now2 = now1 + Duration::from_secs(60);
+    s.downsample_pings_at(now2, RETENTION_DAYS).unwrap();
+
+    let rows = s.ping_minute_rows().unwrap();
+    assert_eq!(rows.len(), 1, "one minute bucket");
+    let row = &rows[0];
+    assert_eq!(row.target, "google");
+    assert_eq!(row.minute, (T0 / 60) as i64);
+    // All five samples: avg (10+20+100+200)/4 = 82.5, min 10, max 200, loss 1/5.
+    assert_eq!(row.avg_ms, 82.5);
+    assert_eq!(row.min_ms, 10.0);
+    assert_eq!(row.max_ms, 200.0);
+    assert_eq!(row.loss_pct, 20.0);
 }
 
 #[test]

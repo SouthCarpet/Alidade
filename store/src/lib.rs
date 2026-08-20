@@ -27,6 +27,10 @@ pub enum StoreError {
 }
 
 /// One persisted round, as stored (speeds in bits/s, times in ms).
+///
+/// `jitter_ms` / `loss_pct` are idle-baseline aliases (same values as
+/// `jitter_idle_ms` / `loss_idle_pct`) kept for CSV compatibility. The
+/// six per-phase columns are the bufferbloat signal.
 #[derive(Debug, Clone)]
 pub struct RoundRow {
     pub id: i64,
@@ -38,6 +42,12 @@ pub struct RoundRow {
     pub ping_up_ms: Option<f64>,
     pub jitter_ms: Option<f64>,
     pub loss_pct: Option<f64>,
+    pub jitter_idle_ms: Option<f64>,
+    pub jitter_down_ms: Option<f64>,
+    pub jitter_up_ms: Option<f64>,
+    pub loss_idle_pct: Option<f64>,
+    pub loss_down_pct: Option<f64>,
+    pub loss_up_pct: Option<f64>,
     pub bytes_down: i64,
     pub bytes_up: i64,
     pub skipped_reason: Option<String>,
@@ -49,6 +59,17 @@ pub struct MetricAgg {
     pub avg: Option<f64>,
     pub min: Option<f64>,
     pub max: Option<f64>,
+}
+
+/// One persisted 1-minute ping aggregate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PingMinuteRow {
+    pub target: String,
+    pub minute: i64,
+    pub avg_ms: f64,
+    pub min_ms: f64,
+    pub max_ms: f64,
+    pub loss_pct: f64,
 }
 
 /// avg/min/max per round metric over a time range.
@@ -84,8 +105,10 @@ impl Store {
                  started_at, down_bps, up_bps,
                  ping_idle_ms, ping_down_ms, ping_up_ms,
                  jitter_ms, loss_pct,
+                 jitter_idle_ms, jitter_down_ms, jitter_up_ms,
+                 loss_idle_pct, loss_down_pct, loss_up_pct,
                  bytes_down, bytes_up, skipped_reason
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         )?;
         let id = stmt.insert(params![
             started_at,
@@ -96,6 +119,12 @@ impl Store {
             ping_avg(r.ping_up),
             r.ping_idle.map(|p| p.jitter_ms),
             r.ping_idle.map(|p| p.loss_pct),
+            r.ping_idle.map(|p| p.jitter_ms),
+            r.ping_down.map(|p| p.jitter_ms),
+            r.ping_up.map(|p| p.jitter_ms),
+            r.ping_idle.map(|p| p.loss_pct),
+            r.ping_down.map(|p| p.loss_pct),
+            r.ping_up.map(|p| p.loss_pct),
             bytes_or_zero(r.down),
             bytes_or_zero(r.up),
             r.skipped_reason.as_deref(),
@@ -132,7 +161,10 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, started_at, down_bps, up_bps,
                     ping_idle_ms, ping_down_ms, ping_up_ms,
-                    jitter_ms, loss_pct, bytes_down, bytes_up, skipped_reason
+                    jitter_ms, loss_pct,
+                    jitter_idle_ms, jitter_down_ms, jitter_up_ms,
+                    loss_idle_pct, loss_down_pct, loss_up_pct,
+                    bytes_down, bytes_up, skipped_reason
              FROM rounds
              WHERE started_at >= ?1 AND started_at <= ?2
              ORDER BY started_at ASC, id ASC",
@@ -183,7 +215,43 @@ impl Store {
     /// Collapse raw ping samples older than `older_than_days` into
     /// `ping_minute` and delete those raw rows. Returns minute-rows written.
     pub fn downsample_pings(&self, older_than_days: u32) -> Result<usize, StoreError> {
-        retention::downsample_pings(&self.conn, older_than_days)
+        self.downsample_pings_at(SystemTime::now(), older_than_days)
+    }
+
+    /// Like [`Self::downsample_pings`], with an injected clock. Production
+    /// callers use [`Self::downsample_pings`]; tests pin `now` so a cutoff
+    /// can be placed inside a minute bucket.
+    pub fn downsample_pings_at(
+        &self,
+        now: SystemTime,
+        older_than_days: u32,
+    ) -> Result<usize, StoreError> {
+        retention::downsample_pings_at(&self.conn, now, older_than_days)
+    }
+
+    /// Minute-aggregate rows. Exposed so tests can assert downsample did not
+    /// overwrite a whole-minute bucket with a later partial one.
+    pub fn ping_minute_rows(&self) -> Result<Vec<PingMinuteRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT target, minute, avg_ms, min_ms, max_ms, loss_pct
+             FROM ping_minute
+             ORDER BY target ASC, minute ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PingMinuteRow {
+                target: row.get(0)?,
+                minute: row.get(1)?,
+                avg_ms: row.get(2)?,
+                min_ms: row.get(3)?,
+                max_ms: row.get(4)?,
+                loss_pct: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Write rounds in `[from, to]` to `out` as CSV. Returns data-row count.
@@ -253,8 +321,14 @@ fn row_to_round(row: &Row<'_>) -> rusqlite::Result<RoundRow> {
         ping_up_ms: row.get(6)?,
         jitter_ms: row.get(7)?,
         loss_pct: row.get(8)?,
-        bytes_down: row.get(9)?,
-        bytes_up: row.get(10)?,
-        skipped_reason: row.get(11)?,
+        jitter_idle_ms: row.get(9)?,
+        jitter_down_ms: row.get(10)?,
+        jitter_up_ms: row.get(11)?,
+        loss_idle_pct: row.get(12)?,
+        loss_down_pct: row.get(13)?,
+        loss_up_pct: row.get(14)?,
+        bytes_down: row.get(15)?,
+        bytes_up: row.get(16)?,
+        skipped_reason: row.get(17)?,
     })
 }
