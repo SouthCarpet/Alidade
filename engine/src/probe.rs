@@ -53,11 +53,30 @@ pub async fn probe_once(p: &Probe, timeout: Duration) -> PingSample {
     PingSample { at, rtt }
 }
 
+/// Resolves `host:port` first, then times only the connect itself — so a
+/// hostname target's reported RTT is connect time, not resolve+connect
+/// time. The two steps together still respect the caller's `timeout`: any
+/// budget DNS resolution spends comes out of what's left for connecting.
 async fn tcp_connect_rtt(host: &str, port: u16, timeout: Duration) -> Option<Duration> {
+    let deadline = Instant::now() + timeout;
+
+    let mut addrs = match tokio::time::timeout(timeout, tokio::net::lookup_host((host, port))).await
+    {
+        Ok(Ok(addrs)) => addrs,
+        Ok(Err(_)) => return None, // resolution failed (NXDOMAIN etc.)
+        Err(_) => return None,     // resolution itself ran past the deadline
+    };
+    let addr = addrs.next()?; // host resolved to nothing usable
+
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return None; // whole budget already spent on resolution
+    }
+
     let start = Instant::now();
-    match tokio::time::timeout(timeout, TcpStream::connect((host, port))).await {
+    match tokio::time::timeout(remaining, TcpStream::connect(addr)).await {
         Ok(Ok(_stream)) => Some(start.elapsed()),
-        Ok(Err(_)) => None, // connection refused / unreachable / DNS failure
+        Ok(Err(_)) => None, // connection refused / unreachable
         Err(_) => None,     // timed out
     }
 }
@@ -139,16 +158,30 @@ fn resolve_ipv4(host: &str) -> Option<Ipv4Addr> {
 // wraps — used directly here via `windows` to match this crate's existing
 // dependency style (see `provider.rs`: official, actively maintained
 // bindings over a thin third-party wrapper).
+/// `IcmpSendEcho` itself is bounded by `timeout_ms`, but the resolve step
+/// inside `icmp_rtt_blocking` (`resolve_ipv4`, a blocking DNS call) is not —
+/// a slow or dead resolver could otherwise block the OS thread indefinitely
+/// while this `async fn` waits on it forever. Wrapping the whole
+/// `spawn_blocking` in `tokio::time::timeout` bounds the *caller's* view of
+/// this call by `timeout` regardless of what the blocking thread is doing;
+/// on elapse we return a loss and abandon that thread (it keeps running to
+/// completion in the blocking pool, but nothing is left waiting on it).
 #[cfg(windows)]
 async fn icmp_rtt(host: &str, timeout: Duration) -> Option<Duration> {
     let host = host.to_string();
     let timeout_ms = u32::try_from(timeout.as_millis())
         .unwrap_or(u32::MAX)
         .max(1);
-    tokio::task::spawn_blocking(move || icmp_rtt_blocking(&host, timeout_ms))
-        .await
-        .ok()
-        .flatten()
+    match tokio::time::timeout(
+        timeout,
+        tokio::task::spawn_blocking(move || icmp_rtt_blocking(&host, timeout_ms)),
+    )
+    .await
+    {
+        Ok(Ok(rtt)) => rtt,
+        Ok(Err(_join_error)) => None, // blocking task panicked
+        Err(_elapsed) => None,        // resolution or ICMP call ran past the deadline
+    }
 }
 
 #[cfg(not(windows))]
@@ -189,7 +222,11 @@ fn icmp_rtt_blocking(host: &str, timeout_ms: u32) -> Option<Duration> {
 
         let request_data = b"alidade";
         let reply_capacity = std::mem::size_of::<ICMP_ECHO_REPLY>() + request_data.len() + 8;
-        let mut reply_buf = vec![0u8; reply_capacity];
+        // Back the buffer with `u64` words, not bytes: `IcmpSendEcho` writes
+        // an `ICMP_ECHO_REPLY` (contains pointer-sized fields) into it, and
+        // a `Vec<u8>` only guarantees byte alignment for that write.
+        let mut reply_buf: Vec<u64> = vec![0u64; reply_capacity.div_ceil(8)];
+        let reply_buf_bytes = (reply_buf.len() * 8) as u32;
 
         let replies = IcmpSendEcho(
             guard.0,
@@ -198,7 +235,7 @@ fn icmp_rtt_blocking(host: &str, timeout_ms: u32) -> Option<Duration> {
             request_data.len() as u16,
             None,
             reply_buf.as_mut_ptr() as *mut core::ffi::c_void,
-            reply_buf.len() as u32,
+            reply_buf_bytes,
             timeout_ms,
         );
 
