@@ -1,0 +1,11 @@
+[package]
+name = "alidade-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.14.0", features = ["canvas", "tokio"] }
+design-tokens = { path = "../../../design/crates/design-tokens", features = ["iced"] }
+alidade-engine = { path = "../engine" }
+alidade-store = { path = "../store" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
