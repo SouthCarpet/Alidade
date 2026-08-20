@@ -1,12 +1,14 @@
 //! Command-line acceptance harness for Alidade's engine and store.
 
 use std::error::Error;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use alidade_engine::{
-    probe_once, run_round, CloudflareProvider, LoadWindow, MetricSelection, PingStats, Probe,
-    RoundKind, Scheduler, Settings,
+    probe_once, run_round, CloudflareProvider, LoadWindow, MetricSelection, PingSample,
+    PingStats, Probe, RoundKind, Scheduler, Settings, TargetSpec,
 };
 use alidade_store::Store;
 use chrono::{NaiveDate, TimeZone, Utc};
@@ -15,6 +17,12 @@ use clap::{Args, Parser, Subcommand};
 const IDLE_PING: Duration = Duration::from_secs(3);
 const PHASE_BUDGET: Duration = Duration::from_secs(10);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How often `continuous` re-runs the retention/downsample job (F4). Once a
+/// day is plenty: `raw_ping_retention_days` is a matter of days, and the
+/// query itself is cheap (an indexed range scan) even run more often than
+/// this, so there is no accuracy reason to run it more.
+const RETENTION_INTERVAL: Duration = Duration::from_secs(86_400);
 
 /// Last second of a UTC day, added to a `--to` date so the whole day counts.
 const LAST_SECOND_OF_DAY: u64 = 86_400 - 1;
@@ -71,14 +79,18 @@ enum Command {
         )]
         interval: Option<String>,
     },
-    /// Ping one configured target once a second and print each answer.
+    /// Ping configured targets once a second and print each answer. Every
+    /// sample taken — a miss included, as loss — is stored in
+    /// `ping_samples` (spec D5/D7, priority B: dense latency history).
     ///
     /// `ping` stays as an alias: it was the name in the first release.
     #[command(name = "ping-monitor", alias = "ping")]
     PingMonitor {
-        /// Configured target name, or any part of it.
-        #[arg(long, default_value = "google")]
-        target: String,
+        /// Configured target name, or any part of it. Repeatable
+        /// (`--target a --target b`); omit to monitor every enabled target
+        /// (spec D5 says "targets", plural).
+        #[arg(long)]
+        target: Vec<String>,
         /// How many samples to take.
         #[arg(long, default_value_t = 30)]
         seconds: u64,
@@ -139,13 +151,50 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             continuous(settings, metrics, throughput_every, ping_every).await?
         }
-        Command::PingMonitor { target, seconds } => ping_monitor(&settings, &target, seconds).await,
+        Command::PingMonitor { target, seconds } => {
+            let store = open_store()?;
+            ping_monitor(&settings, &target, seconds, PING_INTERVAL, &store, boxed_probe_once).await;
+        }
         Command::Export { from, to, out } => export(&from, &to, &out)?,
         Command::ProbeTargets => probe_targets(&settings).await,
     }
     Ok(())
 }
 
+/// F3: a round's own idle/under-load ping samples are NOT also written to
+/// `ping_samples` here (only `insert_round` is called — never
+/// `insert_ping_samples`). This was a real choice, not an oversight:
+///
+/// - Volume alone does not force the answer either way. At the shipped
+///   cadence (`throughput_every` 1h, `ping_every` 5m, `IDLE_PING` 3s and
+///   `PHASE_BUDGET` 10s per phase, `PING_INTERVAL` 1s — see the constants
+///   above and `engine/src/config.rs::Settings::default`) a full round's
+///   ping loop samples idle (~4, t=0..3s) + down (~11, t=0..10s) + up
+///   (~11) ~= 26 samples; 24 full rounds/day ~= 624. A ping-only round
+///   samples idle alone, ~4; of the 288 five-minute slots/day, 24 coincide
+///   with a full round and are replaced by it (`Scheduler::kind_due`), so
+///   264 ping-only rounds/day ~= 1,056. Sum ~= 1,680 rows/day either way —
+///   downsample already bounds the long-run cost (`raw_ping_retention_days`,
+///   default 30), so even kept forever raw this is ~50k rows, trivial for
+///   SQLite.
+/// - The real reason is what the numbers would MEAN once mixed. A round's
+///   under-load samples are deliberately taken while the link is loaded
+///   (that is the whole point of `ping_down`/`ping_up`) and read
+///   meaningfully higher under bufferbloat — see the D5a evidence table in
+///   the spec. `ping-monitor`'s dense samples (F1/F2, this file) are
+///   deliberately taken on an otherwise-idle link. Folding both into one
+///   `target` history would let an hourly throughput round's bufferbloat
+///   spike land in the same `ping_minute` bucket as ninety-nine idle-link
+///   samples and quietly bias it — exactly the kind of wrong-signed number
+///   D5a already had to fix once (see `docs/superpowers/specs/
+///   2026-08-18-continuous-speed-test-design.md`).
+/// - `rounds` already stores what a round measured, at the granularity a
+///   round needs: `ping_idle_ms`/`ping_down_ms`/`ping_up_ms` plus per-phase
+///   jitter/loss (schema v2). The raw per-sample series behind those
+///   aggregates has no consumer once the aggregate is computed; if one ever
+///   shows up (e.g. a per-round detail view), it should be a query scoped to
+///   that round's id, not a merge into the target-keyed dense-history table.
+///
 /// A one-shot round is never byte-capped: the daily budget governs the
 /// unattended cadence, and truncating a test the user asked for by hand would
 /// hand them the short window this release exists to remove.
@@ -186,6 +235,17 @@ async fn continuous(
         format_duration(settings.throughput_every),
         format_duration(settings.ping_every)
     );
+    // F4: the retention/downsample job (`store/src/retention.rs`) has a
+    // caller now. `continuous` is the only long-running production path
+    // today — a one-shot `single`/`ping-monitor` exits before a day could
+    // ever pass — so this is where it belongs; D8's tray-resident background
+    // mode inherits it once it exists, rather than needing its own copy.
+    // Once at start-up (cheap and idempotent even when nothing is old
+    // enough yet) and then once per `RETENTION_INTERVAL` while the loop runs.
+    if let Err(err) = store.downsample_pings(settings.raw_ping_retention_days) {
+        eprintln!("retention: {err}");
+    }
+    let mut last_retention = SystemTime::now();
     loop {
         let started = SystemTime::now();
         let plan = scheduler.plan_next_round(started);
@@ -201,8 +261,17 @@ async fn continuous(
             .map_or(0, |throughput| throughput.bytes)
             .saturating_add(result.up.map_or(0, |throughput| throughput.bytes));
         scheduler.record_bytes(started, bytes);
+        // F3: only the round's own aggregate columns are stored here — see
+        // the comment on `run_and_store` for why its raw idle/under-load
+        // ping samples do not also go to `insert_ping_samples`.
         store.insert_round(&result)?;
         print_round(&result);
+        if started.duration_since(last_retention).unwrap_or(Duration::ZERO) >= RETENTION_INTERVAL {
+            if let Err(err) = store.downsample_pings(settings.raw_ping_retention_days) {
+                eprintln!("retention: {err}");
+            }
+            last_retention = started;
+        }
         let now = SystemTime::now();
         let wait = scheduler
             .next_due(now)
@@ -213,25 +282,108 @@ async fn continuous(
     Ok(())
 }
 
-async fn ping_monitor(settings: &Settings, wanted: &str, seconds: u64) {
-    let target = settings.targets.iter().find(|target| {
-        target.name.eq_ignore_ascii_case(wanted)
-            || target
-                .name
-                .to_ascii_lowercase()
-                .contains(&wanted.to_ascii_lowercase())
-    });
-    let Some(target) = target else {
-        eprintln!("unknown configured target: {wanted}");
-        return;
-    };
-    for _ in 0..seconds.max(1) {
-        let sample = probe_once(&target.probe, PING_INTERVAL).await;
-        match sample.rtt {
-            Some(rtt) => println!("{}: {:.1} ms", target.name, rtt.as_secs_f64() * 1000.0),
-            None => println!("{}: no answer", target.name),
+/// A prober callable, boxed the same way `boxed_probe_once` boxes the real
+/// one. A plain fn pointer (not a capturing closure) so `run_ping_monitor`
+/// can hand it to a spawned task without extra bounds, and so a test can
+/// swap in a fake with no network in it — the same seam
+/// `icmp_rtt_bounded`'s injected resolver uses in `probe.rs`.
+type ProbeFn = fn(Probe, Duration) -> Pin<Box<dyn Future<Output = PingSample> + Send>>;
+
+fn boxed_probe_once(probe: Probe, timeout: Duration) -> Pin<Box<dyn Future<Output = PingSample> + Send>> {
+    Box::pin(async move { probe_once(&probe, timeout).await })
+}
+
+/// Which targets `ping-monitor` should watch: the named subset, resolved
+/// once before the first tick so a misspelled name is a startup error
+/// rather than something that only shows up after minutes of silent output,
+/// or — with none named — every enabled target (spec D5, "targets" is
+/// plural; F2).
+fn resolve_ping_targets<'a>(
+    settings: &'a Settings,
+    wanted: &[String],
+) -> Result<Vec<&'a TargetSpec>, String> {
+    if wanted.is_empty() {
+        return Ok(settings.targets.iter().filter(|t| t.enabled).collect());
+    }
+    wanted
+        .iter()
+        .map(|name| {
+            settings
+                .targets
+                .iter()
+                .find(|t| {
+                    t.enabled
+                        && (t.name.eq_ignore_ascii_case(name)
+                            || t.name.to_ascii_lowercase().contains(&name.to_ascii_lowercase()))
+                })
+                .ok_or_else(|| format!("unknown configured target: {name}"))
+        })
+        .collect()
+}
+
+/// F1/F2: resolve the requested targets, then run the shared monitoring
+/// loop. This is the function `main` dispatches to; `prober` is always
+/// `boxed_probe_once` in production and a fake in tests, so the same call
+/// path (including the store write) is what both exercise.
+async fn ping_monitor(
+    settings: &Settings,
+    wanted: &[String],
+    seconds: u64,
+    interval: Duration,
+    store: &Store,
+    prober: ProbeFn,
+) {
+    let targets = match resolve_ping_targets(settings, wanted) {
+        Ok(targets) => targets,
+        Err(message) => {
+            eprintln!("{message}");
+            return;
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    if targets.is_empty() {
+        eprintln!("no enabled targets to monitor");
+        return;
+    }
+    run_ping_monitor(&targets, seconds.max(1), interval, store, prober).await;
+}
+
+/// F1/F2 core. Every tick probes every target AT ONCE (`JoinSet`, not a
+/// sequential loop) so one dead target's full-timeout loss costs the tick
+/// nothing beyond what it would have cost alone — proven by the LoL EUNE
+/// preset (`104.160.142.3:443`), confirmed dead, in
+/// `every_target_is_probed_concurrently_so_a_dead_one_does_not_delay_the_rest`.
+///
+/// Every sample this loop takes reaches `store.insert_ping_samples` before
+/// the next tick starts, including a miss: `PingSample.rtt: None` is loss,
+/// stored as SQL NULL (see `ping_avg` in `alidade-store`), never as a gap in
+/// the table and never as `0.0`.
+async fn run_ping_monitor(
+    targets: &[&TargetSpec],
+    ticks: u64,
+    interval: Duration,
+    store: &Store,
+    prober: ProbeFn,
+) {
+    for _ in 0..ticks {
+        let mut set = tokio::task::JoinSet::new();
+        for target in targets {
+            let name = target.name.clone();
+            let probe = target.probe.clone();
+            set.spawn(async move { (name, prober(probe, interval).await) });
+        }
+        while let Some(joined) = set.join_next().await {
+            let Ok((name, sample)) = joined else {
+                continue; // a probe task panicked; nothing to store or print for it
+            };
+            match sample.rtt {
+                Some(rtt) => println!("{name}: {:.1} ms", rtt.as_secs_f64() * 1000.0),
+                None => println!("{name}: no answer"),
+            }
+            if let Err(err) = store.insert_ping_samples(&name, std::slice::from_ref(&sample)) {
+                eprintln!("failed to store ping sample for {name}: {err}");
+            }
+        }
+        tokio::time::sleep(interval).await;
     }
 }
 
@@ -497,11 +649,37 @@ mod tests {
         for parsed in [new, old] {
             match parsed.unwrap().command {
                 Command::PingMonitor { target, seconds } => {
-                    assert_eq!(target, "cloudflare");
+                    assert_eq!(target, vec!["cloudflare".to_string()]);
                     assert_eq!(seconds, 30);
                 }
                 other => panic!("expected the ping monitor, got {other:?}"),
             }
+        }
+    }
+
+    /// F2: the flag is repeatable and empty by default — "several targets,
+    /// or all enabled ones" (spec D5).
+    #[test]
+    fn target_is_repeatable_and_defaults_to_empty_meaning_every_enabled_target() {
+        let none = Cli::try_parse_from(["alidade", "ping-monitor"]).unwrap();
+        let several = Cli::try_parse_from([
+            "alidade",
+            "ping-monitor",
+            "--target",
+            "cloudflare",
+            "--target",
+            "lol",
+        ])
+        .unwrap();
+        match none.command {
+            Command::PingMonitor { target, .. } => assert!(target.is_empty()),
+            other => panic!("expected the ping monitor, got {other:?}"),
+        }
+        match several.command {
+            Command::PingMonitor { target, .. } => {
+                assert_eq!(target, vec!["cloudflare".to_string(), "lol".to_string()]);
+            }
+            other => panic!("expected the ping monitor, got {other:?}"),
         }
     }
 
@@ -629,5 +807,159 @@ mod tests {
     #[test]
     fn from_is_the_first_instant_of_its_day() {
         assert_eq!(secs(parse_day_start("1970-01-02").unwrap()), 86_400);
+    }
+
+    // --- F1/F2: ping-monitor persistence -----------------------------
+
+    fn test_target(name: &str, host: &str) -> TargetSpec {
+        TargetSpec {
+            name: name.to_string(),
+            probe: Probe::Icmp { host: host.to_string() },
+            verified: true,
+            enabled: true,
+        }
+    }
+
+    /// A no-network stand-in for `boxed_probe_once`: any target whose host
+    /// is `DEAD_HOST` is a miss, everything else answers instantly. Real
+    /// network in a unit test is explicitly out per the task brief.
+    const DEAD_HOST: &str = "dead.invalid";
+
+    fn fake_prober(probe: Probe, _timeout: Duration) -> Pin<Box<dyn Future<Output = PingSample> + Send>> {
+        Box::pin(async move {
+            let host = match &probe {
+                Probe::Icmp { host } | Probe::TcpConnect { host, .. } => host.clone(),
+            };
+            let rtt = if host == DEAD_HOST {
+                None
+            } else {
+                Some(Duration::from_millis(20))
+            };
+            PingSample { at: SystemTime::now(), rtt }
+        })
+    }
+
+    /// The finding this task exists to fix, reproduced as a test that would
+    /// have caught it: `ping_monitor` is the exact function `main` calls
+    /// for the `ping-monitor` command (see the dispatch in `main`), with
+    /// only the network-touching `prober` swapped for `fake_prober` — the
+    /// same seam `icmp_rtt_bounded` uses for its injected resolver in
+    /// `probe.rs`. A test that inserted its own fixtures into
+    /// `ping_samples`, the way the store crate's retention tests do, would
+    /// have stayed green for 71 rounds while nothing called the write path;
+    /// this one drives `ping_monitor` and only then looks at the table.
+    ///
+    /// Mutation-checked: with the `store.insert_ping_samples(...)` call
+    /// removed from `run_ping_monitor`, this test fails with
+    /// `assertion `left == right` failed: one sample per tick reached ping_samples`
+    /// `  left: 0`
+    /// `  right: 3`
+    /// — see `task-7d-report.md` for the captured run. Restoring the call
+    /// makes it pass again.
+    #[tokio::test]
+    async fn ping_monitor_persists_every_sample_it_takes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("a.db")).unwrap();
+        let settings = Settings {
+            targets: vec![test_target("Alpha", "1.2.3.4")],
+            ..Settings::default()
+        };
+
+        ping_monitor(&settings, &[], 3, Duration::from_millis(5), &store, fake_prober).await;
+
+        assert_eq!(
+            store.ping_sample_count().unwrap(),
+            3,
+            "one sample per tick reached ping_samples"
+        );
+    }
+
+    /// F2: with several targets monitored (the default — no `--target`
+    /// named, so every enabled target), each row lands under its own
+    /// `target`, not under whichever target happened to run first or last.
+    #[tokio::test]
+    async fn samples_are_attributed_to_the_right_target_when_several_are_monitored() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("a.db")).unwrap();
+        let settings = Settings {
+            targets: vec![test_target("Alpha", "1.2.3.4"), test_target("Beta", "5.6.7.8")],
+            ..Settings::default()
+        };
+
+        ping_monitor(&settings, &[], 2, Duration::from_millis(5), &store, fake_prober).await;
+
+        assert_eq!(store.ping_sample_rtts_for("Alpha").unwrap().len(), 2);
+        assert_eq!(store.ping_sample_rtts_for("Beta").unwrap().len(), 2);
+        assert_eq!(
+            store.ping_sample_count().unwrap(),
+            4,
+            "no sample landed under the wrong target or a phantom third one"
+        );
+    }
+
+    /// F1: a target that never answers is loss, stored as SQL NULL — never
+    /// omitted (a gap in the table would read as "nobody looked") and never
+    /// `0.0` (which would read as the best possible link).
+    #[tokio::test]
+    async fn a_non_answering_target_is_stored_as_loss_not_as_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("a.db")).unwrap();
+        let settings = Settings {
+            targets: vec![test_target("Dead", DEAD_HOST)],
+            ..Settings::default()
+        };
+
+        ping_monitor(&settings, &[], 2, Duration::from_millis(5), &store, fake_prober).await;
+
+        let rtts = store.ping_sample_rtts_for("Dead").unwrap();
+        assert_eq!(rtts.len(), 2, "the miss must still be a row, not an omission");
+        assert!(
+            rtts.iter().all(Option::is_none),
+            "a miss must be a recorded loss (NULL), not skipped: {rtts:?}"
+        );
+        assert!(
+            !rtts.contains(&Some(0.0)),
+            "a miss must never be stored as a perfect 0.0 ms ping: {rtts:?}"
+        );
+    }
+
+    /// A prober where every target sleeps out its full timeout before
+    /// reporting loss — the deterministic stand-in for the confirmed-dead
+    /// LoL EUNE preset (`104.160.142.3:443`) the brief names.
+    fn slow_prober(_probe: Probe, timeout: Duration) -> Pin<Box<dyn Future<Output = PingSample> + Send>> {
+        Box::pin(async move {
+            tokio::time::sleep(timeout).await;
+            PingSample { at: SystemTime::now(), rtt: None }
+        })
+    }
+
+    /// F2: targets are probed AT ONCE, not one after another. Four targets
+    /// that each take a full `interval` to time out would cost `>= 4 *
+    /// interval` probed sequentially before the tick's own trailing sleep
+    /// even starts; probed concurrently (`run_ping_monitor`'s `JoinSet`)
+    /// the tick costs about one `interval` regardless of target count.
+    #[tokio::test]
+    async fn every_target_is_probed_concurrently_so_a_dead_one_does_not_delay_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("a.db")).unwrap();
+        let interval = Duration::from_millis(60);
+        let settings = Settings {
+            targets: (0..4)
+                .map(|i| test_target(&format!("Dead{i}"), DEAD_HOST))
+                .collect(),
+            ..Settings::default()
+        };
+
+        let start = std::time::Instant::now();
+        ping_monitor(&settings, &[], 1, interval, &store, slow_prober).await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < interval * 3,
+            "elapsed {elapsed:?} for 4 targets each bounded by {interval:?} suggests \
+             sequential probing, not concurrent (sequential would cost >= 4 * interval \
+             for the probes alone, before the tick's own trailing sleep)"
+        );
+        assert_eq!(store.ping_sample_count().unwrap(), 4, "still one row per target");
     }
 }

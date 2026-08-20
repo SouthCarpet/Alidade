@@ -305,6 +305,23 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM ping_samples", [], |row| row.get(0))?;
         Ok(n as usize)
     }
+
+    /// Raw `rtt_ms` values stored for one target, oldest first. `None` is a
+    /// recorded loss (SQL NULL), not `0.0` — exposed so tests can assert a
+    /// miss reached storage as the right kind of absent, and so attribution
+    /// (which target a row belongs to) is checkable by more than a total
+    /// count.
+    pub fn ping_sample_rtts_for(&self, target: &str) -> Result<Vec<Option<f64>>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT rtt_ms FROM ping_samples WHERE target = ?1 ORDER BY at ASC")?;
+        let rows = stmt.query_map(params![target], |row| row.get(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
 }
 
 pub(crate) fn unix_secs(t: SystemTime) -> Result<i64, StoreError> {
