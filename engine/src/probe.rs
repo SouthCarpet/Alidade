@@ -135,13 +135,23 @@ pub fn stats(samples: &[PingSample]) -> PingStats {
     }
 }
 
-/// Resolve a probe host to an IPv4 address. Accepts a literal IP directly;
-/// otherwise resolves via the platform resolver (blocking — callers on the
-/// ICMP path already run inside `spawn_blocking`).
-fn resolve_ipv4(host: &str) -> Option<Ipv4Addr> {
+/// Resolve a probe host to an IPv4 address. A literal IP short-circuits
+/// here (no resolver call); anything else is handed to `resolve` — the
+/// blocking step callers on the ICMP path already run inside
+/// `spawn_blocking`. Generic over the resolver so tests can inject one that
+/// simulates a slow or hanging DNS lookup (see `icmp_rtt_bounded` below);
+/// production always calls this with `dns_lookup_ipv4`, the real platform
+/// resolver.
+fn resolve_ipv4_with(host: &str, resolve: impl FnOnce(&str) -> Option<Ipv4Addr>) -> Option<Ipv4Addr> {
     if let Ok(ip) = host.parse::<Ipv4Addr>() {
         return Some(ip);
     }
+    resolve(host)
+}
+
+/// Blocking DNS lookup via `ToSocketAddrs` — the real resolver production
+/// code plugs into `resolve_ipv4_with` (a literal IP never reaches this).
+fn dns_lookup_ipv4(host: &str) -> Option<Ipv4Addr> {
     (host, 0u16)
         .to_socket_addrs()
         .ok()?
@@ -168,13 +178,28 @@ fn resolve_ipv4(host: &str) -> Option<Ipv4Addr> {
 /// completion in the blocking pool, but nothing is left waiting on it).
 #[cfg(windows)]
 async fn icmp_rtt(host: &str, timeout: Duration) -> Option<Duration> {
+    icmp_rtt_bounded(host, timeout, dns_lookup_ipv4).await
+}
+
+/// Shared by `icmp_rtt` (production, always called with `dns_lookup_ipv4`)
+/// and a test below (called with a resolver that sleeps past `timeout`).
+/// Generic over the resolver so the timeout-bound property documented above
+/// is provable without touching the network: swap in a resolver that hangs
+/// and confirm the call still returns (as a loss) within `timeout`, not
+/// after the hang.
+#[cfg(windows)]
+async fn icmp_rtt_bounded(
+    host: &str,
+    timeout: Duration,
+    resolve: impl FnOnce(&str) -> Option<Ipv4Addr> + Send + 'static,
+) -> Option<Duration> {
     let host = host.to_string();
     let timeout_ms = u32::try_from(timeout.as_millis())
         .unwrap_or(u32::MAX)
         .max(1);
     match tokio::time::timeout(
         timeout,
-        tokio::task::spawn_blocking(move || icmp_rtt_blocking(&host, timeout_ms)),
+        tokio::task::spawn_blocking(move || icmp_rtt_blocking_with(&host, timeout_ms, resolve)),
     )
     .await
     {
@@ -192,13 +217,17 @@ async fn icmp_rtt(_host: &str, _timeout: Duration) -> Option<Duration> {
 }
 
 #[cfg(windows)]
-fn icmp_rtt_blocking(host: &str, timeout_ms: u32) -> Option<Duration> {
+fn icmp_rtt_blocking_with(
+    host: &str,
+    timeout_ms: u32,
+    resolve: impl FnOnce(&str) -> Option<Ipv4Addr>,
+) -> Option<Duration> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::NetworkManagement::IpHelper::{
         IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho, ICMP_ECHO_REPLY,
     };
 
-    let dest = resolve_ipv4(host)?;
+    let dest = resolve_ipv4_with(host, resolve)?;
     // IcmpSendEcho's IPAddr is a raw 4-byte value in the same left-to-right
     // octet order as the dotted address; on a little-endian host that is
     // exactly what `from_ne_bytes` over `octets()` produces (the standard
@@ -259,6 +288,49 @@ mod tests {
 
     #[test]
     fn resolve_ipv4_accepts_a_literal_loopback_address() {
-        assert_eq!(resolve_ipv4("127.0.0.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
+        // A literal IP must short-circuit before the resolver ever runs —
+        // proven by handing it a resolver that always fails: if the literal
+        // path were broken, this would resolve to `None` instead.
+        assert_eq!(
+            resolve_ipv4_with("127.0.0.1", |_| None),
+            Some(Ipv4Addr::new(127, 0, 0, 1))
+        );
+    }
+
+    /// `icmp_probe_to_an_unresolvable_host_is_a_bounded_loss` in
+    /// `tests/probe.rs` uses `.invalid`, whose local resolution fails in
+    /// ~30 ms — it can't tell a `tokio::time::timeout` wrapper from no
+    /// wrapper at all. This test closes that gap directly: it injects a
+    /// resolver that sleeps well past `timeout` before returning, so it can
+    /// only pass if something actually bounds the wait. Mutation-checked:
+    /// removing the `tokio::time::timeout(...)` around `spawn_blocking` in
+    /// `icmp_rtt_bounded` makes this call block for the full 2 s hang and
+    /// fails the upper-bound assertion (see task-4b-report.md).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn icmp_rtt_is_bounded_by_timeout_even_when_dns_resolution_hangs() {
+        let timeout = Duration::from_millis(200);
+        let hang = Duration::from_secs(2);
+
+        let start = Instant::now();
+        let rtt = icmp_rtt_bounded("host-does-not-matter.example", timeout, move |_host| {
+            std::thread::sleep(hang);
+            None
+        })
+        .await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            rtt.is_none(),
+            "a resolver that never returns in time must be a loss"
+        );
+        assert!(
+            elapsed >= timeout,
+            "elapsed {elapsed:?} was suspiciously faster than the timeout {timeout:?}"
+        );
+        assert!(
+            elapsed < timeout + Duration::from_millis(500),
+            "elapsed {elapsed:?} was not bounded by timeout {timeout:?} — was the timeout wrapper removed?"
+        );
     }
 }

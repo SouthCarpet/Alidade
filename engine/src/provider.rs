@@ -215,6 +215,7 @@ pub struct MockProvider {
     down_bits_per_sec: f64,
     up_bits_per_sec: f64,
     fail: bool,
+    delay: Duration,
 }
 
 impl MockProvider {
@@ -225,6 +226,7 @@ impl MockProvider {
             down_bits_per_sec: bits_per_sec,
             up_bits_per_sec: bits_per_sec,
             fail: false,
+            delay: Duration::ZERO,
         }
     }
 
@@ -236,6 +238,23 @@ impl MockProvider {
             down_bits_per_sec: 0.0,
             up_bits_per_sec: 0.0,
             fail: true,
+            delay: Duration::ZERO,
+        }
+    }
+
+    /// Like `new`, but each `download`/`upload` call sleeps `delay` before
+    /// returning its (still instantly synthesized) throughput. `new`'s
+    /// provider resolves in effectively zero wall-clock time, which hides a
+    /// `RoundRunner` regression that serializes ping and provider instead of
+    /// running them concurrently (spec D4) — every round test would still
+    /// pass. This variant gives the provider phase real duration so that
+    /// property is provable (see `round.rs` tests, Task 4b).
+    pub fn with_delay(bits_per_sec: f64, delay: Duration) -> Self {
+        Self {
+            down_bits_per_sec: bits_per_sec,
+            up_bits_per_sec: bits_per_sec,
+            fail: false,
+            delay,
         }
     }
 
@@ -256,12 +275,18 @@ impl SpeedProvider for MockProvider {
         if self.fail {
             return Err(EngineError::Other("mock provider configured to fail".to_string()));
         }
+        if !self.delay.is_zero() {
+            tokio::time::sleep(self.delay).await;
+        }
         Ok(Self::synthesize(self.down_bits_per_sec, budget, max_bytes))
     }
 
     async fn upload(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
         if self.fail {
             return Err(EngineError::Other("mock provider configured to fail".to_string()));
+        }
+        if !self.delay.is_zero() {
+            tokio::time::sleep(self.delay).await;
         }
         Ok(Self::synthesize(self.up_bits_per_sec, budget, max_bytes))
     }
