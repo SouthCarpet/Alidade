@@ -11,3 +11,9 @@ design-tokens = { path = "../../../design/crates/design-tokens", features = ["ic
 alidade-engine = { path = "../engine" }
 alidade-store = { path = "../store" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+# For the opt-in update check. Versions match what the workspace lockfile
+# already resolved for the engine, so this adds no new transitive tree.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2.0.20"

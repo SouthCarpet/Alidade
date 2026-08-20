@@ -8,6 +8,8 @@
 //! otherwise have to hide in `#[cfg(test)]` modules and stay untestable
 //! from the outside.
 
+pub mod chart;
 pub mod state;
 pub mod theme;
 pub mod ui;
+pub mod update;
