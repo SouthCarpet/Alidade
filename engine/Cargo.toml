@@ -8,7 +8,16 @@ async-trait = "0.1.92"
 futures-core = "0.3.34"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream"] }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "net"] }
 
 [dev-dependencies]
 wiremock = "0.6.5"
+
+# ICMP (Task 3, spec D10: Windows-first). No-admin-rights ping via the
+# IP Helper API (IcmpCreateFile/IcmpSendEcho), same approach `winping` wraps.
+# Kept target-specific so the crate still compiles on non-Windows hosts.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Foundation",
+] }
