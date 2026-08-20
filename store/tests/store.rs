@@ -341,10 +341,43 @@ fn csv_export_writes_a_header_and_one_line_per_round() {
         .unwrap();
     assert_eq!(n, 2);
     let text = std::fs::read_to_string(&out).unwrap();
-    assert!(text.starts_with(
-        "started_at,mode,down_mbps,up_mbps,ping_idle_ms,ping_down_ms,ping_up_ms,jitter_ms,loss_pct,capped,skipped_reason"
-    ));
-    assert_eq!(text.lines().count(), 3);
+    let lines: Vec<&str> = text.lines().collect();
+    let header_index = lines
+        .iter()
+        .position(|line| line.starts_with("started_at,"))
+        .expect("the CSV column header must follow its methodology comments");
+    let methodology = &lines[..header_index];
+    assert!(methodology.iter().all(|line| line.starts_with("# ")));
+    assert!(methodology.iter().any(|line| line.contains("Alidade v")));
+    assert!(methodology
+        .iter()
+        .any(|line| line.contains("wall-clock bounded to 10 seconds")));
+    assert!(methodology
+        .iter()
+        .any(|line| line.contains("speed.cloudflare.com/__down")));
+    assert!(methodology
+        .iter()
+        .any(|line| line.contains("ICMP echo to 1.1.1.1")));
+    assert!(methodology
+        .iter()
+        .any(|line| line.contains("started_at is UTC")));
+    assert!(methodology.iter().any(|line| line.contains("Rows: 2")));
+    assert!(methodology
+        .iter()
+        .any(|line| line.contains("no trustworthy rate was available")));
+    assert!(methodology
+        .iter()
+        .any(|line| line.contains("load_down_ms and load_up_ms")));
+    assert_eq!(lines.len() - header_index - 1, 2, "one data line per round");
+
+    let csv_without_comments = lines[header_index..].join("\n");
+    let mut reader = csv::Reader::from_reader(csv_without_comments.as_bytes());
+    let records: Vec<_> = reader.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(
+        records.len(),
+        2,
+        "the uncommented CSV must round-trip its rows"
+    );
 }
 
 /// F1 + F2 + F3 through the whole store: the kind of a round, whether a data
@@ -418,43 +451,51 @@ fn the_csv_says_which_kind_of_round_each_row_is_and_whether_it_was_capped() {
     // asserted `ends_with(",false,")`, which silently encoded "capped is the
     // second-to-last column" and broke the moment a column was appended —
     // a test failing for a reason unrelated to what it is testing.
-    let header: Vec<&str> = lines[0].split(',').collect();
+    let header_index = lines
+        .iter()
+        .position(|line| line.starts_with("started_at,"))
+        .unwrap();
+    let header: Vec<&str> = lines[header_index].split(',').collect();
     let col = |name: &str| {
         header
             .iter()
             .position(|h| *h == name)
-            .unwrap_or_else(|| panic!("export lost the `{name}` column: {}", lines[0]))
+            .unwrap_or_else(|| panic!("export lost the `{name}` column: {}", lines[header_index]))
     };
     let cell = |line: &str, name: &str| -> String {
-        line.split(',').nth(col(name)).unwrap_or_default().to_string()
+        line.split(',')
+            .nth(col(name))
+            .unwrap_or_default()
+            .to_string()
     };
 
-    assert_eq!(cell(lines[1], "mode"), "full");
-    assert_eq!(cell(lines[1], "capped"), "false");
+    assert_eq!(cell(lines[header_index + 1], "mode"), "full");
+    assert_eq!(cell(lines[header_index + 1], "capped"), "false");
     assert_eq!(
-        cell(lines[2], "capped"),
+        cell(lines[header_index + 2], "capped"),
         "true",
         "the capped round must be exported as capped: {}",
-        lines[2]
+        lines[header_index + 2]
     );
     assert_eq!(
-        cell(lines[4], "load_down_ms"),
+        cell(lines[header_index + 4], "load_down_ms"),
         "1207",
         "a speed with no window beside it cannot be judged - 207 Mbit/s over 1.2s and over 10s \
          are different claims, and the CSV must let a reader tell them apart even when the rate \
          itself was discarded: {}",
-        lines[4]
+        lines[header_index + 4]
     );
     assert!(
-        lines[3].contains(",ping,"),
+        lines[header_index + 3].contains(",ping,"),
         "a ping-only round must not read as a full round with a blank download: {}",
-        lines[3]
+        lines[header_index + 3]
     );
     assert!(
-        lines[4].contains(",full,,18.56,") && lines[4].contains("rate-limiting"),
+        lines[header_index + 4].contains(",full,,18.56,")
+            && lines[header_index + 4].contains("rate-limiting"),
         "a rate-limited round must stay `full` with an empty down_mbps and the reason \
          visible, not a blank cell that could mean anything: {}",
-        lines[4]
+        lines[header_index + 4]
     );
 
     let rows = s
