@@ -1,0 +1,8 @@
+[package]
+name = "alidade-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "alidade"
+path = "src/main.rs"
