@@ -15,7 +15,10 @@ use std::time::Duration;
 
 pub use config::{Settings, TargetSpec};
 pub use probe::{probe_once, stats, PingSample, PingStats, Probe};
-pub use provider::{CloudflareProvider, EndpointConfig, MockProvider, SpeedProvider, Throughput};
+pub use provider::{
+    CloudflareProvider, EndpointConfig, MockProvider, SpeedProvider, Throughput,
+    DOWNLOAD_CHUNK_BYTES, MAX_REQUEST_BYTES, UPLOAD_CHUNK_BYTES,
+};
 pub use round::{run_round, MetricSelection, RoundConfig, RoundResult};
 pub use schedule::{RoundPlan, Scheduler};
 

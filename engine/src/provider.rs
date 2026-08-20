@@ -18,10 +18,19 @@ use futures_core::Stream;
 
 use crate::EngineError;
 
-/// One measured phase: bytes actually moved, how long it took, and the
-/// derived rate. `duration` is measured from first payload byte (see the
-/// comments in `download`/`upload` for exactly where that boundary is),
-/// not from `send()`/connect, so rates are not deflated by TLS/DNS setup.
+/// One measured phase: bytes actually moved, how long the measurement clock
+/// ran, and the derived rate.
+///
+/// `duration` is **payload time only**. The clock runs while a response body
+/// is being read (download) or while the request body is being pushed
+/// (upload); it never runs during connect, TLS, or a request/response header
+/// exchange (see the comments in `download`/`upload` for the exact
+/// boundaries). A download phase issues several requests (see
+/// `DOWNLOAD_CHUNK_BYTES`), so its wall clock is longer than `duration` by
+/// the sum of the per-request header round-trips — that overhead is excluded
+/// from the rate on purpose (the caller cannot avoid it and did not cause
+/// it), but it is not hidden: it is bounded by one round-trip per chunk on a
+/// connection that stays warm across the phase.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Throughput {
     pub bits_per_sec: f64,
@@ -66,20 +75,114 @@ pub trait SpeedProvider: Send + Sync {
 pub struct CloudflareProvider {
     client: reqwest::Client,
     cfg: EndpointConfig,
+    download_chunk_bytes: u64,
 }
 
 impl CloudflareProvider {
+    /// Provider with the default download chunk (`DOWNLOAD_CHUNK_BYTES`).
     pub fn new(cfg: EndpointConfig) -> Self {
+        Self::with_download_chunk_bytes(cfg, DOWNLOAD_CHUNK_BYTES)
+    }
+
+    /// Same, with an explicit per-request download chunk. The chunk is a
+    /// tuning knob (see `DOWNLOAD_CHUNK_BYTES`), and tests need one small
+    /// enough that a millisecond-scale budget still spans many requests.
+    ///
+    /// `chunk_bytes` is clamped below `MAX_REQUEST_BYTES`, so no caller can
+    /// reintroduce the 403 by asking for a chunk the server refuses.
+    pub fn with_download_chunk_bytes(cfg: EndpointConfig, chunk_bytes: u64) -> Self {
         Self {
             client: reqwest::Client::new(),
             cfg,
+            download_chunk_bytes: chunk_bytes.clamp(1, MAX_REQUEST_BYTES - 1),
         }
+    }
+
+    /// One download request for `request_bytes`, read until the body ends or
+    /// `phase_deadline` passes. Returns the bytes read and the time the
+    /// measurement clock ran for them.
+    ///
+    /// The clock starts once the response headers are back, so connect, TLS
+    /// and this request's header round-trip are outside it. The body read is
+    /// bounded by the phase deadline, not by a fresh per-chunk budget, so
+    /// chunking cannot stretch the phase past `budget`; only `SEND_GRACE`
+    /// can, and only while waiting for a server that has not answered at all.
+    async fn download_chunk(
+        &self,
+        request_bytes: u64,
+        phase_deadline: Instant,
+    ) -> Result<(u64, Duration), EngineError> {
+        let url = format!("{}?bytes={}", self.cfg.download_url, request_bytes);
+        let send_budget = phase_deadline.saturating_duration_since(Instant::now()) + SEND_GRACE;
+        let mut resp = match tokio::time::timeout(send_budget, self.client.get(&url).send()).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => return Err(EngineError::Http(e)),
+            Err(_elapsed) => return Err(EngineError::Timeout(send_budget)),
+        };
+        if !resp.status().is_success() {
+            return Err(EngineError::Status(resp.status().as_u16()));
+        }
+
+        let start = Instant::now();
+        let mut bytes_read: u64 = 0;
+        loop {
+            let remaining = phase_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, resp.chunk()).await {
+                Ok(Ok(Some(chunk))) => bytes_read += chunk.len() as u64,
+                Ok(Ok(None)) => break, // this chunk's body is done; the caller asks for the next
+                Ok(Err(e)) => return Err(EngineError::Http(e)),
+                Err(_elapsed) => break, // phase deadline hit mid-read
+            }
+        }
+        Ok((bytes_read, start.elapsed()))
     }
 }
 
 /// Upload chunk size: small enough to check the deadline often, large
 /// enough not to dominate the measurement with per-chunk overhead.
-const UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
+pub const UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Hard per-request ceiling of Cloudflare's `__down`: a `bytes` value at or
+/// above 100,000,000 (decimal) is refused with HTTP 403. This is a request
+/// validation limit, not a rate limit — it never recovers by waiting.
+///
+/// Measured live against `https://speed.cloudflare.com/__down` (GET, this
+/// machine, 2026-08-20):
+///
+/// | `bytes` | result |
+/// |---|---|
+/// | 1,048,576 | 200 |
+/// | 25,000,000 | 200 |
+/// | 50,000,000 | 200 |
+/// | 67,108,864 | 200 |
+/// | 90,000,000 | 200 |
+/// | 99,000,000 | 200 |
+/// | 100,000,000 | **403** |
+/// | 104,857,599 | **403** |
+/// | 104,857,600 | **403** |
+///
+/// So `bytes < 100_000_000` is the contract. The first shipped CLI passed
+/// its whole phase ceiling (104,857,600 = 100 MiB) as a single `bytes`
+/// value, so every live download was a 403 and download was never measured
+/// once against the real service.
+pub const MAX_REQUEST_BYTES: u64 = 100_000_000;
+
+/// Bytes asked for per download request. A phase is time-bounded, so it
+/// issues as many of these as fit in the budget; the size only decides how
+/// much of the budget goes to payload rather than to request overhead.
+///
+/// 25 MB is the balance point. One `reqwest::Client` is reused for the whole
+/// phase, so the cost between chunks is a header round-trip (~20 ms here),
+/// not a TLS handshake: on a 1 Gbit/s link a chunk is ~200 ms of payload
+/// against that ~20 ms, so ~90% of the wall clock still carries data, and on
+/// slower links the ratio only improves. Going much larger buys little and
+/// makes the final chunk ask the server for far more than the remaining
+/// budget can drain; going much smaller spends the budget on round-trips.
+/// It must in any case stay below `MAX_REQUEST_BYTES`.
+pub const DOWNLOAD_CHUNK_BYTES: u64 = 25_000_000;
 
 /// Extra time allowed, beyond the phase `budget`, for the server to send
 /// its *first* response bytes (download) or to finish acknowledging a
@@ -93,49 +196,76 @@ const SEND_GRACE: Duration = Duration::from_secs(5);
 
 #[async_trait::async_trait]
 impl SpeedProvider for CloudflareProvider {
+    /// Download for `budget`, never moving more than `max_bytes` in total.
+    ///
+    /// The phase is **time-bounded**: it issues successive requests of
+    /// `download_chunk_bytes` each (always below `MAX_REQUEST_BYTES`, see
+    /// C1) until the budget runs out, and reports the bytes accumulated
+    /// across all of them. One request could never do this — the server
+    /// caps a single request below 100 MB, so a single-request phase can
+    /// only measure what fits in one chunk and then stops early, which on a
+    /// fast link means measuring a fraction of a second of a 10 s window
+    /// (a window dominated by TCP slow start) and leaving the rest of the
+    /// round's "ping under load" running under no load at all.
+    ///
+    /// `max_bytes` keeps its meaning as the phase's **total** ceiling — the
+    /// data-budget guard — not a per-request size. Note that a ceiling can
+    /// still end the phase before the budget does, and then the window is
+    /// short again for the same reason as above: with the CLI's 100 MiB and
+    /// a 10 s budget that happens on any link above ~84 Mbit/s (measured
+    /// live 2026-08-20: 165 Mbit/s filled the ceiling in 5.07 s). Choosing
+    /// those two numbers against each other is the caller's call — this
+    /// function honours whichever comes first.
+    ///
+    /// Failure policy: if the **first** request fails there is no
+    /// measurement, so the error propagates (never a fake 0). If a **later**
+    /// chunk fails once bytes were already measured, the phase returns what
+    /// it measured: those bytes really did cross the wire in that time, and
+    /// discarding a good 8 s of data because the 9th second broke would
+    /// throw away the better measurement of the two.
     async fn download(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
-        let url = format!("{}?bytes={}", self.cfg.download_url, max_bytes);
-        let send_budget = budget + SEND_GRACE;
-        let mut resp = match tokio::time::timeout(send_budget, self.client.get(&url).send()).await
-        {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(e)) => return Err(EngineError::Http(e)),
-            Err(_elapsed) => return Err(EngineError::Timeout(send_budget)),
-        };
-        if !resp.status().is_success() {
-            return Err(EngineError::Status(resp.status().as_u16()));
-        }
-
-        // Start the clock once headers are back: connect + TLS + request-send
-        // already happened during `send().await` above, so this measures wire
-        // time for the response body only, not connection setup.
-        let start = Instant::now();
-        let deadline = start + budget;
+        let deadline = Instant::now() + budget;
         let mut bytes_read: u64 = 0;
+        // Sum of the per-chunk body-read times. Deliberately excludes each
+        // chunk's header round-trip (see `Throughput::duration`).
+        let mut measured = Duration::ZERO;
 
-        while bytes_read < max_bytes {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+        loop {
+            let bytes_left = max_bytes.saturating_sub(bytes_read);
+            if bytes_left == 0 || deadline.saturating_duration_since(Instant::now()).is_zero() {
                 break;
             }
-            match tokio::time::timeout(remaining, resp.chunk()).await {
-                Ok(Ok(Some(chunk))) => {
-                    bytes_read += chunk.len() as u64;
+            let request_bytes = self.download_chunk_bytes.min(bytes_left);
+            match self.download_chunk(request_bytes, deadline).await {
+                Ok((bytes, spent)) => {
+                    bytes_read += bytes;
+                    measured += spent;
                 }
-                Ok(Ok(None)) => break, // body exhausted before budget/cap
-                Ok(Err(e)) => return Err(EngineError::Http(e)),
-                Err(_elapsed) => break, // budget hit mid-read
+                Err(e) if bytes_read == 0 => return Err(e),
+                Err(_partial) => break,
             }
         }
 
-        let duration = start.elapsed();
         Ok(Throughput {
             bytes: bytes_read,
-            duration,
-            bits_per_sec: bytes_read as f64 * 8.0 / duration.as_secs_f64().max(f64::EPSILON),
+            duration: measured,
+            bits_per_sec: bytes_read as f64 * 8.0 / measured.as_secs_f64().max(f64::EPSILON),
         })
     }
 
+    /// Upload for `budget`, never moving more than `max_bytes` in total.
+    ///
+    /// This phase needs no chunked-request treatment (C2): `__up` takes the
+    /// payload as the request *body*, and the body is a stream this crate
+    /// feeds, so one request already covers the whole budget — the stream
+    /// yields `UPLOAD_CHUNK_BYTES` at a time purely to check the deadline
+    /// often, and those chunks are frames inside one request, not separate
+    /// requests. There is no server-side per-request ceiling like `__down`'s
+    /// `bytes` limit to run into, so the phase's measurable rate is bounded
+    /// only by `max_bytes / budget` (the data-budget guard, which is the
+    /// caller's own choice) and never by a chunk size.
+    /// `upload_is_not_capped_by_its_chunk_size` in `tests/provider.rs` holds
+    /// that property.
     async fn upload(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
         let deadline = Instant::now() + budget;
         let sent = Arc::new(AtomicU64::new(0));

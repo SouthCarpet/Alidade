@@ -117,11 +117,11 @@ impl Store {
             ping_avg(r.ping_idle),
             ping_avg(r.ping_down),
             ping_avg(r.ping_up),
-            r.ping_idle.map(|p| p.jitter_ms),
+            ping_jitter(r.ping_idle),
             r.ping_idle.map(|p| p.loss_pct),
-            r.ping_idle.map(|p| p.jitter_ms),
-            r.ping_down.map(|p| p.jitter_ms),
-            r.ping_up.map(|p| p.jitter_ms),
+            ping_jitter(r.ping_idle),
+            ping_jitter(r.ping_down),
+            ping_jitter(r.ping_up),
             r.ping_idle.map(|p| p.loss_pct),
             r.ping_down.map(|p| p.loss_pct),
             r.ping_up.map(|p| p.loss_pct),
@@ -286,8 +286,17 @@ fn from_unix_secs(secs: i64) -> Result<SystemTime, StoreError> {
     Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
 }
 
+/// A phase with no RTT (nothing answered) stores SQL NULL, not `0.0`: a dead
+/// target must not read back as a perfect one, and NULL keeps it out of the
+/// `AVG`/`MIN`/`MAX` aggregates instead of dragging them down. The matching
+/// `loss_*_pct` column still records that the phase happened and lost
+/// everything.
 fn ping_avg(stats: Option<PingStats>) -> Option<f64> {
-    stats.map(|s| s.avg_ms)
+    stats.and_then(|s| s.avg_ms)
+}
+
+fn ping_jitter(stats: Option<PingStats>) -> Option<f64> {
+    stats.and_then(|s| s.jitter_ms)
 }
 
 fn bytes_or_zero(t: Option<Throughput>) -> i64 {

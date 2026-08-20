@@ -12,6 +12,7 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "
 tokio-util = { version = "0.7.18", features = ["rt"] }
 
 [dev-dependencies]
+tempfile = "3.27.0"
 wiremock = "0.6.5"
 
 # ICMP (Task 3, spec D10: Windows-first). No-admin-rights ping via the

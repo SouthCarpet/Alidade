@@ -17,6 +17,15 @@ probe targets.
 Ping-monitor samples are kept raw for a configurable window (default 30
 days), then downsampled to 1-minute aggregates.
 
+## Settings
+
+`%APPDATA%\Alidade\settings.toml`. The first run writes it from the
+defaults and prints the path. Edit it to change the interval, the
+endpoints, the metrics, or the probe targets — the two game targets ship
+as `verified = false` community data and are meant to be checked with
+`alidade probe-targets` and then edited or removed. A file that does not
+parse is reported as an error and never overwritten.
+
 ## Workspace
 
 - `engine/` (`alidade-engine`) — measurement traits, the Cloudflare
@@ -28,17 +37,19 @@ days), then downsampled to 1-minute aggregates.
   continuous loop from the terminal. The acceptance harness for the
   engine, and stays in the repo afterward as an ops tool.
 
-## CLI (planned)
+## CLI
 
 ```
 alidade single           # run one measurement round
 alidade continuous       # run rounds on a schedule
-alidade ping             # ping-only monitor loop
-alidade export           # CSV export of a time range
-alidade probe-targets    # list/check configured probe targets
+alidade ping-monitor     # ping-only monitor loop (alias: ping)
+alidade export           # CSV export of a date range
+alidade probe-targets    # check which configured probe targets answer
+alidade --help           # per-command help with --help after the command
 ```
 
-All commands are stubs as of this scaffold (plan 052, task 1). The
-build sequence lives in the parent projects-vault ecosystem at
+`export --from`/`--to` take UTC dates (`YYYY-MM-DD`); both ends are
+inclusive of the whole day. The build sequence lives in the parent
+projects-vault ecosystem at
 `docs/superpowers/plans/2026-08-20-alidade-engine.md`, design decisions
 in `docs/superpowers/specs/2026-08-18-continuous-speed-test-design.md`.

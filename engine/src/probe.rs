@@ -28,15 +28,22 @@ pub struct PingSample {
 }
 
 /// Aggregate stats over a run of samples. `sent` counts every sample
-/// (including losses); the timing fields (`avg_ms`/`min_ms`/`max_ms`/
-/// `jitter_ms`) are computed only over the successful ones and are `0.0`
-/// when nothing succeeded.
+/// (including losses); `loss_pct` is always present, because loss is the
+/// measurement.
+///
+/// The timing fields are computed over the successful samples only and are
+/// `None` when there is nothing to compute them from. A target that answered
+/// nothing has **no RTT** — reporting `0.0` there would make a dead target
+/// indistinguishable from a perfect one and would drag every average that
+/// touches it towards zero. `jitter_ms` is a difference between consecutive
+/// successes, so it needs two of them: one successful sample yields `Some`
+/// avg/min/max and `None` jitter.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PingStats {
-    pub avg_ms: f64,
-    pub min_ms: f64,
-    pub max_ms: f64,
-    pub jitter_ms: f64,
+    pub avg_ms: Option<f64>,
+    pub min_ms: Option<f64>,
+    pub max_ms: Option<f64>,
+    pub jitter_ms: Option<f64>,
     pub loss_pct: f64,
     pub sent: u32,
 }
@@ -83,13 +90,14 @@ async fn tcp_connect_rtt(host: &str, port: u16, timeout: Duration) -> Option<Dur
 
 /// Mean absolute difference between consecutive successful samples, in
 /// order of appearance (losses are skipped, not treated as a gap value).
-/// `0.0` with fewer than two successes — no pair to diff.
-fn jitter_ms(successes_ms: &[f64]) -> f64 {
+/// `None` with fewer than two successes — no pair to diff, and `0.0` there
+/// would read as "perfectly stable".
+fn jitter_ms(successes_ms: &[f64]) -> Option<f64> {
     if successes_ms.len() < 2 {
-        return 0.0;
+        return None;
     }
     let diffs: f64 = successes_ms.windows(2).map(|w| (w[1] - w[0]).abs()).sum();
-    diffs / (successes_ms.len() - 1) as f64
+    Some(diffs / (successes_ms.len() - 1) as f64)
 }
 
 pub fn stats(samples: &[PingSample]) -> PingStats {
@@ -107,11 +115,12 @@ pub fn stats(samples: &[PingSample]) -> PingStats {
     };
 
     if successes_ms.is_empty() {
+        // Nothing answered: there is no RTT to report. The loss stays.
         return PingStats {
-            avg_ms: 0.0,
-            min_ms: 0.0,
-            max_ms: 0.0,
-            jitter_ms: 0.0,
+            avg_ms: None,
+            min_ms: None,
+            max_ms: None,
+            jitter_ms: None,
             loss_pct,
             sent,
         };
@@ -126,9 +135,9 @@ pub fn stats(samples: &[PingSample]) -> PingStats {
         .fold(f64::NEG_INFINITY, f64::max);
 
     PingStats {
-        avg_ms,
-        min_ms,
-        max_ms,
+        avg_ms: Some(avg_ms),
+        min_ms: Some(min_ms),
+        max_ms: Some(max_ms),
         jitter_ms: jitter_ms(&successes_ms),
         loss_pct,
         sent,

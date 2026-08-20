@@ -24,10 +24,10 @@ fn some_down() -> Throughput {
 
 fn some_idle_ping() -> PingStats {
     PingStats {
-        avg_ms: 12.0,
-        min_ms: 10.0,
-        max_ms: 15.0,
-        jitter_ms: 1.5,
+        avg_ms: Some(12.0),
+        min_ms: Some(10.0),
+        max_ms: Some(15.0),
+        jitter_ms: Some(1.5),
         loss_pct: 0.0,
         sent: 5,
     }
@@ -57,27 +57,20 @@ fn round_roundtrips_with_null_metrics_preserved() {
         started_at: SystemTime::now(),
         down: Some(some_down()),
         up: None,
-        ping_idle: Some(PingStats {
-            avg_ms: 12.0,
-            min_ms: 10.0,
-            max_ms: 15.0,
-            jitter_ms: 1.5,
-            loss_pct: 0.0,
-            sent: 5,
-        }),
+        ping_idle: Some(some_idle_ping()),
         ping_down: Some(PingStats {
-            avg_ms: 40.0,
-            min_ms: 20.0,
-            max_ms: 80.0,
-            jitter_ms: 12.0,
+            avg_ms: Some(40.0),
+            min_ms: Some(20.0),
+            max_ms: Some(80.0),
+            jitter_ms: Some(12.0),
             loss_pct: 2.5,
             sent: 8,
         }),
         ping_up: Some(PingStats {
-            avg_ms: 30.0,
-            min_ms: 15.0,
-            max_ms: 60.0,
-            jitter_ms: 8.0,
+            avg_ms: Some(30.0),
+            min_ms: Some(15.0),
+            max_ms: Some(60.0),
+            jitter_ms: Some(8.0),
             loss_pct: 5.0,
             sent: 8,
         }),
@@ -107,6 +100,58 @@ fn round_roundtrips_with_null_metrics_preserved() {
     // CSV aliases stay the idle baseline.
     assert_eq!(rows[0].jitter_ms, rows[0].jitter_idle_ms);
     assert_eq!(rows[0].loss_pct, rows[0].loss_idle_pct);
+}
+
+/// I4. The LoL EUNE preset `104.160.142.3:443` is dead — live
+/// `probe-targets` shows `no` / `-` for it. Before this fix, the same target
+/// in a round produced `avg_ms: 0.0`, and because the slot was
+/// `Some(PingStats)` the store wrote a real `0.0` into `ping_idle_ms`. A
+/// dead target then read back as the best link on record and pulled every
+/// `AVG(ping_idle_ms)` towards zero.
+///
+/// This goes through `stats()` rather than a hand-built `PingStats` on
+/// purpose: the defect was the seam between the two, so the test has to
+/// cross it.
+#[test]
+fn a_target_that_answers_nothing_is_stored_as_loss_never_as_a_zero_ping() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(&dir.path().join("a.db")).unwrap();
+    let all_lost = alidade_engine::stats(&[
+        PingSample { at: SystemTime::now(), rtt: None },
+        PingSample { at: SystemTime::now(), rtt: None },
+        PingSample { at: SystemTime::now(), rtt: None },
+    ]);
+
+    s.insert_round(&round_with(None, None, Some(all_lost)))
+        .unwrap();
+
+    let rows = s
+        .rounds_between(SystemTime::UNIX_EPOCH, SystemTime::now())
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_ne!(
+        rows[0].ping_idle_ms,
+        Some(0.0),
+        "a dead target was stored as a perfect 0.0 ms ping"
+    );
+    assert_eq!(
+        rows[0].ping_idle_ms, None,
+        "no answer means no RTT, so the column must be NULL"
+    );
+    assert_eq!(
+        rows[0].loss_idle_pct,
+        Some(100.0),
+        "the loss itself is the measurement and must survive"
+    );
+    assert_eq!(rows[0].jitter_idle_ms, None);
+
+    // NULL keeps the dead target out of the averages instead of dragging
+    // them down — the second half of the same defect.
+    let aggregates = s
+        .round_aggregates(SystemTime::UNIX_EPOCH, SystemTime::now())
+        .unwrap();
+    assert_eq!(aggregates.ping_idle_ms.avg, None);
+    assert_eq!(aggregates.loss_pct.avg, Some(100.0));
 }
 
 #[test]

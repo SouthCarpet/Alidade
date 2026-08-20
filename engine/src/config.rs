@@ -1,6 +1,8 @@
 //! User-editable settings and the shipped, explicitly unverified game presets.
 
+use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -81,13 +83,27 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Load a TOML settings file, returning defaults when it has not been created yet.
-    pub fn load_or_default(path: &Path) -> Result<Self, EngineError> {
-        if !path.exists() {
-            return Ok(Self::default());
+    /// Load the TOML settings file, creating it from the compiled defaults
+    /// the first time. Returns the settings and whether *this* call wrote
+    /// the file (so the caller can tell the user where it now lives).
+    ///
+    /// Writing on first use is the point: the presets — including the two
+    /// marked `verified = false` and their provenance comments — are only
+    /// "user-editable" once they are actually on disk. What comes back is
+    /// re-read from that file, so a defaults-to-TOML-to-defaults mismatch
+    /// surfaces immediately instead of silently diverging from what the user
+    /// sees.
+    ///
+    /// A file that exists but does not parse is an error and is **never**
+    /// overwritten: a broken hand edit must stay repairable, not be replaced
+    /// by defaults behind the user's back.
+    pub fn load_or_create(path: &Path) -> Result<(Self, bool), EngineError> {
+        let created = !path.exists();
+        if created {
+            Self::default().save(path)?;
         }
         let content = fs::read_to_string(path)?;
-        Self::parse(&content)
+        Ok((Self::parse(&content)?, created))
     }
 
     /// Default `%APPDATA%\\Alidade\\settings.toml` location (with a portable fallback).
@@ -99,12 +115,26 @@ impl Settings {
         base.join("Alidade").join("settings.toml")
     }
 
-    /// Save an editable TOML file. The two game presets retain their provenance comments.
+    /// Save an editable TOML file. The two game presets retain their
+    /// provenance comments.
+    ///
+    /// Atomic: the bytes go to a scratch file next to the destination, are
+    /// flushed to the disk, and only then replace the destination by rename.
+    /// Writing straight onto `settings.toml` truncates it first, so a crash
+    /// or a full disk mid-write would leave the user with an empty or
+    /// half-written settings file and no way back.
     pub fn save(&self, path: &Path) -> Result<(), EngineError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, self.to_toml())?;
+        let scratch = scratch_path_for(path);
+        let mut file = fs::File::create(&scratch)?;
+        file.write_all(self.to_toml().as_bytes())?;
+        // Without this the rename can land before the content does, which is
+        // the same lost-settings outcome one power cut later.
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&scratch, path)?;
         Ok(())
     }
 
@@ -169,8 +199,8 @@ impl Settings {
 
     fn to_toml(&self) -> String {
         let mut out = format!(
-            "interval_seconds = {}\ndaily_budget_bytes = {}\nraw_ping_retention_days = {}\n\n[endpoints]\ndownload_url = \"{}\"\nupload_url = \"{}\"\n\n[metrics]\ndownload = {}\nupload = {}\nping = {}\n",
-            self.interval.as_secs(), option_u64(self.daily_budget_bytes), self.raw_ping_retention_days,
+            "interval_seconds = {}\n{}raw_ping_retention_days = {}\n\n[endpoints]\ndownload_url = \"{}\"\nupload_url = \"{}\"\n\n[metrics]\ndownload = {}\nupload = {}\nping = {}\n",
+            self.interval.as_secs(), budget_lines(self.daily_budget_bytes), self.raw_ping_retention_days,
             escape(&self.endpoints.download_url), escape(&self.endpoints.upload_url),
             self.metrics.download, self.metrics.upload, self.metrics.ping,
         );
@@ -298,6 +328,9 @@ fn parse_number<T: std::str::FromStr>(value: &str) -> Result<T, EngineError> {
         .map_err(|_| EngineError::Config(format!("expected number, got `{value}`")))
 }
 
+/// `none` is not a TOML literal; earlier versions of this file wrote it, so
+/// it is still accepted on read. New files express "no budget" the valid
+/// way — by leaving the key out (see `budget_lines`).
 fn parse_optional_number(value: &str) -> Result<Option<u64>, EngineError> {
     if value.trim() == "none" {
         Ok(None)
@@ -310,12 +343,179 @@ fn required<T>(value: Option<T>, name: &str) -> Result<T, EngineError> {
     value.ok_or_else(|| EngineError::Config(format!("missing {name}")))
 }
 
-fn option_u64(value: Option<u64>) -> String {
-    value
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "none".to_string())
+/// The `daily_budget_bytes` line, or — when there is no budget — a commented
+/// example instead of a key. TOML has no `none` literal, and the file has to
+/// survive being opened by a real TOML editor; an absent key says "off" in
+/// valid TOML while the comment keeps the setting discoverable.
+fn budget_lines(value: Option<u64>) -> String {
+    match value {
+        Some(bytes) => format!("daily_budget_bytes = {bytes}\n"),
+        None => "# No daily transfer budget. Uncomment and set the bytes to enable one:\n# daily_budget_bytes = 5000000000\n".to_string(),
+    }
+}
+
+/// Scratch file [`Settings::save`] writes before renaming it onto `path`. It
+/// stays in the destination's own directory on purpose: a rename is only
+/// atomic within one volume, so a scratch file in `%TEMP%` would quietly
+/// degrade into a copy whenever the two sit on different drives.
+fn scratch_path_for(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("settings.toml"))
+        .to_os_string();
+    name.push(".tmp");
+    path.with_file_name(name)
 }
 
 fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_dir() -> tempfile::TempDir {
+        // `unwrap` is fine here: tests may unwrap, library code may not.
+        tempfile::tempdir().unwrap()
+    }
+
+    /// I2: before this, `Settings::save` had no caller and `load_or_default`
+    /// never created the file, so the shipped presets — including the two
+    /// `verified = false` game targets the spec requires users to be able to
+    /// edit — existed only inside the compiled binary.
+    #[test]
+    fn a_missing_settings_file_is_created_from_the_defaults() {
+        let dir = scratch_dir();
+        let path = dir.path().join("settings.toml");
+
+        let (settings, created) = Settings::load_or_create(&path).unwrap();
+
+        assert!(created, "the call must report that it wrote the file");
+        assert!(path.exists(), "the settings file must be on disk afterwards");
+        assert_eq!(
+            settings,
+            Settings::default(),
+            "what came back must equal the defaults that were written"
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("verified = false"),
+            "the unverified presets must reach the file the user edits:\n{text}"
+        );
+    }
+
+    #[test]
+    fn an_existing_settings_file_is_loaded_and_left_alone() {
+        let dir = scratch_dir();
+        let path = dir.path().join("settings.toml");
+        let hand_written = "interval_seconds = 900\n\n[metrics]\ndownload = false\n";
+        fs::write(&path, hand_written).unwrap();
+
+        let (settings, created) = Settings::load_or_create(&path).unwrap();
+
+        assert!(!created);
+        assert_eq!(settings.interval, Duration::from_secs(900));
+        assert!(!settings.metrics.download);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            hand_written,
+            "loading must not rewrite the user's file"
+        );
+    }
+
+    /// A hand edit that does not parse must stay on disk exactly as the user
+    /// left it — replacing it with defaults would destroy the only copy of
+    /// whatever they were trying to write.
+    #[test]
+    fn a_corrupt_settings_file_is_an_error_and_is_never_overwritten() {
+        let dir = scratch_dir();
+        let path = dir.path().join("settings.toml");
+        let broken = "interval_seconds = not-a-number\n";
+        fs::write(&path, broken).unwrap();
+
+        let result = Settings::load_or_create(&path);
+
+        assert!(result.is_err(), "a corrupt file must not load");
+        assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+    }
+
+    /// I3: the atomicity property, stated as behaviour. The scratch path is
+    /// occupied by a directory, so the scratch write cannot succeed — which
+    /// stands in for any mid-write failure (full disk, power cut, crash).
+    /// An atomic save reports the error and leaves the old settings intact;
+    /// `fs::write` straight onto the destination would already have
+    /// truncated them before it could fail.
+    #[test]
+    fn a_save_that_cannot_complete_leaves_the_previous_settings_intact() {
+        let dir = scratch_dir();
+        let path = dir.path().join("settings.toml");
+        let previous = "interval_seconds = 1200\n";
+        fs::write(&path, previous).unwrap();
+        fs::create_dir(scratch_path_for(&path)).unwrap();
+
+        let result = Settings::default().save(&path);
+
+        assert!(result.is_err(), "a save that cannot write must report it");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            previous,
+            "the destination was modified even though the save failed"
+        );
+    }
+
+    #[test]
+    fn a_successful_save_replaces_the_file_and_leaves_no_scratch_behind() {
+        let dir = scratch_dir();
+        let path = dir.path().join("settings.toml");
+        fs::write(&path, "interval_seconds = 1200\n").unwrap();
+
+        Settings::default().save(&path).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("interval_seconds = 600"));
+        assert!(!text.contains("1200"), "old content survived the rename");
+        assert!(
+            !scratch_path_for(&path).exists(),
+            "the scratch file must be gone after the rename"
+        );
+    }
+
+    #[test]
+    fn the_scratch_file_sits_next_to_its_destination() {
+        let path = Path::new("A:/somewhere/Alidade/settings.toml");
+        assert_eq!(scratch_path_for(path).parent(), path.parent());
+        assert_ne!(scratch_path_for(path), path);
+    }
+
+    /// `daily_budget_bytes = none` is not valid TOML, so a user who opened
+    /// the file with a real TOML tool could not save it back.
+    #[test]
+    fn no_budget_is_written_as_valid_toml_not_as_a_none_literal() {
+        let text = Settings::default().to_toml();
+        assert!(
+            !text.contains("= none"),
+            "invalid TOML literal still emitted:\n{text}"
+        );
+        assert!(
+            !text.lines().any(|l| l.trim_start().starts_with("daily_budget_bytes")),
+            "no budget must mean no key:\n{text}"
+        );
+        assert_eq!(Settings::parse(&text).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn a_budget_round_trips_and_the_legacy_none_literal_still_reads() {
+        let with_budget = Settings {
+            daily_budget_bytes: Some(5_000_000_000),
+            ..Settings::default()
+        };
+        let text = with_budget.to_toml();
+        assert!(text.contains("daily_budget_bytes = 5000000000"));
+        assert_eq!(Settings::parse(&text).unwrap(), with_budget);
+
+        // Files written before this fix must keep loading.
+        let legacy = "interval_seconds = 600\ndaily_budget_bytes = none\n";
+        assert_eq!(Settings::parse(legacy).unwrap().daily_budget_bytes, None);
+    }
 }
