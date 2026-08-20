@@ -1,0 +1,7 @@
+{
+  "name": "alidade",
+  "accent_hue": 190,
+  "neutral_tint": { "hue": 260, "chroma": 0.012 },
+  "series_order": null,
+  "mark": "apps/alidade/assets/icon.svg"
+}

@@ -7,9 +7,9 @@
 use alidade_app::state::App;
 use alidade_app::ui::font_regular;
 
-const FONT_REGULAR_BYTES: &[u8] = include_bytes!("../../../../design/assets/fonts/Inter-Regular.ttf");
-const FONT_MEDIUM_BYTES: &[u8] = include_bytes!("../../../../design/assets/fonts/Inter-Medium.ttf");
-const FONT_SEMIBOLD_BYTES: &[u8] = include_bytes!("../../../../design/assets/fonts/Inter-SemiBold.ttf");
+const FONT_REGULAR_BYTES: &[u8] = include_bytes!("../vendor/fonts/Inter-Regular.ttf");
+const FONT_MEDIUM_BYTES: &[u8] = include_bytes!("../vendor/fonts/Inter-Medium.ttf");
+const FONT_SEMIBOLD_BYTES: &[u8] = include_bytes!("../vendor/fonts/Inter-SemiBold.ttf");
 
 const WINDOW_W: f32 = 1280.0;
 const WINDOW_H: f32 = 800.0;

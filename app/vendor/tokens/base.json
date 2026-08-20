@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "neutrals": {
+    "light": {
+      "background": {"l": 0.98, "c": 0.012, "h": 260},
+      "well": {"l": 0.96, "c": 0.012, "h": 260},
+      "surface-raised": {"l": 1.00, "c": 0.012, "h": 260},
+      "border": {"l": 0.82, "c": 0.012, "h": 260},
+      "border-top": {"l": 0.88, "c": 0.012, "h": 260},
+      "milled": {"l": 1, "c": 0, "h": 0, "a": 0},
+      "text": {"l": 0.18, "c": 0.012, "h": 260},
+      "text-muted": {"l": 0.42, "c": 0.012, "h": 260},
+      "disabled-fill": {"l": 0.82, "c": 0, "h": 0},
+      "scrim": {"l": 0.18, "c": 0.012, "h": 260, "a": 0.36}
+    },
+    "dark": {
+      "background": {"l": 0.14, "c": 0.012, "h": 260},
+      "well": {"l": 0.11, "c": 0.012, "h": 260},
+      "surface-raised": {"l": 0.20, "c": 0.012, "h": 260},
+      "border": {"l": 0.32, "c": 0.012, "h": 260},
+      "border-top": {"l": 0.32, "c": 0.012, "h": 260},
+      "milled": {"l": 1, "c": 0, "h": 0, "a": 0.04},
+      "text": {"l": 0.95, "c": 0.012, "h": 260},
+      "text-muted": {"l": 0.72, "c": 0.012, "h": 260},
+      "disabled-fill": {"l": 0.28, "c": 0, "h": 0},
+      "scrim": {"l": 0.05, "c": 0.012, "h": 260, "a": 0.5}
+    }
+  },
+  "accent_family": {
+    "_comment": "Template/rule, not expanded values. Hue (h) comes from each app's accent_hue. Deltas apply to the accent l/c above. Council canon corrections (plan 051) win over the winner render's dark hover/active/soft values.",
+    "light": {
+      "accent": {"l": 0.46, "c": 0.13},
+      "hover": {"l_delta": -0.04},
+      "active": {"l_delta": -0.08, "c_delta": 0.01},
+      "soft": {"l": 0.94, "c_factor": 0.35, "c_max": 0.06},
+      "soft_active": {"c_delta": 0.01},
+      "soft_foreground": {"l": 0.35, "c_factor": 0.6, "min_contrast": 4.5},
+      "focus": {"l": 0.55, "ring_width_px": 2, "ring_offset_px": 2, "min_contrast": 3},
+      "on_accent": {"l": 0.99, "c": 0, "h": 0}
+    },
+    "dark": {
+      "accent": {"l": 0.73, "c": 0.11},
+      "hover": {"l_delta": 0.04},
+      "active": {"l_delta": 0.08, "c_delta": 0.01},
+      "soft": {"l": 0.26, "c_factor": 0.35, "c_max": 0.06},
+      "soft_active": {"c_delta": 0.01},
+      "soft_foreground": {"l": 0.88, "c_factor": 0.6, "min_contrast": 4.5},
+      "focus": {"l": 0.70, "ring_width_px": 2, "ring_offset_px": 2, "min_contrast": 3},
+      "on_accent": {"l": 0.14, "c": 0.012, "h": 260}
+    }
+  },
+  "status": {
+    "light": {
+      "danger": {"l": 0.50, "c": 0.15, "h": 27},
+      "danger_hover": {"l": 0.46, "c": 0.15, "h": 27},
+      "danger_active": {"l": 0.42, "c": 0.16, "h": 27},
+      "danger_soft": {"l": 0.95, "c": 0.045, "h": 27},
+      "warning": {"l": 0.55, "c": 0.12, "h": 70},
+      "warning_soft": {"l": 0.95, "c": 0.036, "h": 70},
+      "success": {"l": 0.50, "c": 0.11, "h": 150},
+      "success_soft": {"l": 0.95, "c": 0.033, "h": 150}
+    },
+    "dark": {
+      "danger": {"l": 0.70, "c": 0.13, "h": 27},
+      "danger_hover": {"l": 0.74, "c": 0.13, "h": 27},
+      "danger_active": {"l": 0.78, "c": 0.14, "h": 27},
+      "danger_soft": {"l": 0.24, "c": 0.039, "h": 27},
+      "warning": {"l": 0.75, "c": 0.11, "h": 70},
+      "warning_soft": {"l": 0.24, "c": 0.033, "h": 70},
+      "success": {"l": 0.72, "c": 0.10, "h": 150},
+      "success_soft": {"l": 0.24, "c": 0.03, "h": 150}
+    }
+  },
+  "dataviz": {
+    "_comment": "Six series total: series 1 = app accent hue, slots 2-6 = first five of anchor_hues after removing any anchor within accent_exclusion_deg of the accent hue (append spare_hue if fewer than five remain). Council canon correction 3 - not the winner's own anchors.",
+    "series_color": {
+      "light": {"l": 0.52, "c": 0.13},
+      "dark": {"l": 0.72, "c": 0.11}
+    },
+    "anchor_hues": [250, 40, 165, 25, 330, 200],
+    "spare_hue": 300,
+    "accent_exclusion_deg": 20,
+    "anchor_slots": 5,
+    "band_alpha": 0.12,
+    "grid_alpha": 0.4,
+    "history_chroma_factor": 0.6,
+    "stroke_patterns": ["solid", "dashed", "dotted", "dash-dot", "long-dash", "dash-dot-dot"]
+  },
+  "space": {"1": 4, "2": 8, "3": 12, "4": 16, "6": 24, "8": 32},
+  "radius": {"sm": 4, "md": 6, "lg": 8, "pill": 999},
+  "type": {
+    "xs": 12, "sm": 14, "md": 16, "lg": 20, "xl": 24, "2xl": 28, "3xl": 32,
+    "font_sans": "'Inter',system-ui,-apple-system,'Segoe UI',sans-serif",
+    "numerals": "tnum lnum"
+  },
+  "motion": {"fast": 80, "base": 120, "draw": 240, "live": 1200, "ease_standard": "cubic-bezier(.2,0,0,1)"},
+  "shadow": {
+    "raise": {
+      "light": {"x": 0, "y": 1, "blur": 4, "color": {"l": 0.18, "c": 0.012, "h": 260, "a": 0.06}},
+      "dark": {"x": 0, "y": 1, "blur": 4, "color": {"l": 0.02, "c": 0.012, "h": 260, "a": 0.24}}
+    }
+  },
+  "misc": {"control_h": 32}
+}
