@@ -390,7 +390,15 @@ fn the_csv_says_which_kind_of_round_each_row_is_and_whether_it_was_capped() {
         ping_idle: Some(some_idle_ping()),
         ping_down: None,
         ping_up: None,
-        down_load: None,
+        // The rate was discarded as untrustworthy, but 25 MB really did cross
+        // the wire in 1.2 s of an intended 10 s window. That window is the
+        // only thing that lets a reader of the CSV tell this round apart from
+        // one measured over the full budget.
+        down_load: Some(LoadWindow {
+            duration: Duration::from_millis(1207),
+            ping_samples: 2,
+            bytes: 25_000_000,
+        }),
         up_load: None,
         capped: false,
         skipped_reason: Some(
@@ -406,11 +414,36 @@ fn the_csv_says_which_kind_of_round_each_row_is_and_whether_it_was_capped() {
     let text = std::fs::read_to_string(&out).unwrap();
     let lines: Vec<&str> = text.lines().collect();
 
-    assert!(lines[1].contains(",full,") && lines[1].ends_with(",false,"));
-    assert!(
-        lines[2].contains(",full,") && lines[2].ends_with(",true,"),
+    // Read by column NAME, not by position or line suffix. The previous form
+    // asserted `ends_with(",false,")`, which silently encoded "capped is the
+    // second-to-last column" and broke the moment a column was appended —
+    // a test failing for a reason unrelated to what it is testing.
+    let header: Vec<&str> = lines[0].split(',').collect();
+    let col = |name: &str| {
+        header
+            .iter()
+            .position(|h| *h == name)
+            .unwrap_or_else(|| panic!("export lost the `{name}` column: {}", lines[0]))
+    };
+    let cell = |line: &str, name: &str| -> String {
+        line.split(',').nth(col(name)).unwrap_or_default().to_string()
+    };
+
+    assert_eq!(cell(lines[1], "mode"), "full");
+    assert_eq!(cell(lines[1], "capped"), "false");
+    assert_eq!(
+        cell(lines[2], "capped"),
+        "true",
         "the capped round must be exported as capped: {}",
         lines[2]
+    );
+    assert_eq!(
+        cell(lines[4], "load_down_ms"),
+        "1207",
+        "a speed with no window beside it cannot be judged - 207 Mbit/s over 1.2s and over 10s \
+         are different claims, and the CSV must let a reader tell them apart even when the rate \
+         itself was discarded: {}",
+        lines[4]
     );
     assert!(
         lines[3].contains(",ping,"),

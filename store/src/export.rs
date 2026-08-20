@@ -14,7 +14,7 @@ use crate::{unix_secs, RoundRow, StoreError};
 /// or a reading was measured but discarded as too short to trust (F1) — an
 /// export that hides any of these presents a short or missing measurement
 /// as an ordinary blank.
-const HEADER: [&str; 11] = [
+const HEADER: [&str; 13] = [
     "started_at",
     "mode",
     "down_mbps",
@@ -26,6 +26,17 @@ const HEADER: [&str; 11] = [
     "loss_pct",
     "capped",
     "skipped_reason",
+    // How long each throughput phase actually pushed data, in ms. Exported
+    // because a speed alone cannot be judged: 207.37 Mbit/s measured over
+    // 1.2 s of an intended 10 s window is not the same claim as the same
+    // figure measured over the full window, and a reader of this file has no
+    // other way to tell them apart. Rounds written before the engine gained
+    // a trustworthiness rule are exactly the ones that need this column, and
+    // they cannot be corrected after the fact without asserting a phase
+    // budget the row never recorded — so the context is supplied instead of
+    // the number being rewritten.
+    "load_down_ms",
+    "load_up_ms",
 ];
 
 /// Write `rows` to `out` with the round-export header. Returns the number
@@ -46,6 +57,8 @@ pub fn write_rounds_csv(rows: &[RoundRow], out: &Path) -> Result<usize, StoreErr
             opt_f64(row.loss_pct),
             row.capped.to_string(),
             row.skipped_reason.clone().unwrap_or_default(),
+            opt_f64(row.load_down_ms),
+            opt_f64(row.load_up_ms),
         ])?;
     }
     wtr.flush()?;
