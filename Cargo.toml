@@ -1,3 +1,12 @@
 [workspace]
 members = ["engine", "store", "cli", "app"]
 resolver = "2"
+
+# Shared metadata every member inherits with `<field>.workspace = true`.
+# The dual licence is the Rust ecosystem convention: a user picks either.
+# LICENSE-MIT and LICENSE-APACHE at the repo root carry the full texts.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/SouthCarpet/Alidade"
