@@ -81,11 +81,27 @@ impl CloudflareProvider {
 /// enough not to dominate the measurement with per-chunk overhead.
 const UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
+/// Extra time allowed, beyond the phase `budget`, for the server to send
+/// its *first* response bytes (download) or to finish acknowledging a
+/// fully-sent request body (upload) — server "think time", not transfer
+/// time. `budget` bounds how long we spend moving bytes once the exchange
+/// is under way; `SEND_GRACE` bounds how long we'll wait for that exchange
+/// to start responding at all. Without this, an unresponsive server hangs
+/// `send()` forever — `budget` alone only ever bounded the body-read loop
+/// (download) or was invisible to the final response wait (upload).
+const SEND_GRACE: Duration = Duration::from_secs(5);
+
 #[async_trait::async_trait]
 impl SpeedProvider for CloudflareProvider {
     async fn download(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
         let url = format!("{}?bytes={}", self.cfg.download_url, max_bytes);
-        let mut resp = self.client.get(&url).send().await?;
+        let send_budget = budget + SEND_GRACE;
+        let mut resp = match tokio::time::timeout(send_budget, self.client.get(&url).send()).await
+        {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => return Err(EngineError::Http(e)),
+            Err(_elapsed) => return Err(EngineError::Timeout(send_budget)),
+        };
         if !resp.status().is_success() {
             return Err(EngineError::Status(resp.status().as_u16()));
         }
@@ -135,13 +151,22 @@ impl SpeedProvider for CloudflareProvider {
         // without lower-level socket hooks; in the real round (spec D4) an
         // idle ping runs first, so the connection is already warm by the time
         // upload starts and connect/TLS cost is not on this path in practice.
+        // Concretely: `download()` runs immediately before `upload()` in that
+        // sequence and already established the connection to this same
+        // client/host, so this clock excludes only that already-hidden cost,
+        // never a cold connect in the real flow.
         let start = Instant::now();
-        let resp = self
-            .client
-            .post(&self.cfg.upload_url)
-            .body(body)
-            .send()
-            .await?;
+        let send_budget = budget + SEND_GRACE;
+        let resp = match tokio::time::timeout(
+            send_budget,
+            self.client.post(&self.cfg.upload_url).body(body).send(),
+        )
+        .await
+        {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => return Err(EngineError::Http(e)),
+            Err(_elapsed) => return Err(EngineError::Timeout(send_budget)),
+        };
         let duration = start.elapsed();
 
         if !resp.status().is_success() {
@@ -187,15 +212,30 @@ impl Stream for UploadStream {
 /// without a network. Returns immediately — it never actually waits out
 /// `budget` — so higher-layer tests stay fast.
 pub struct MockProvider {
-    pub down_bits_per_sec: f64,
-    pub up_bits_per_sec: f64,
+    down_bits_per_sec: f64,
+    up_bits_per_sec: f64,
+    fail: bool,
 }
 
 impl MockProvider {
-    pub fn new(down_bits_per_sec: f64, up_bits_per_sec: f64) -> Self {
+    /// Reports `bits_per_sec` for both download and upload, synthesized
+    /// instantly (no sleep).
+    pub fn new(bits_per_sec: f64) -> Self {
         Self {
-            down_bits_per_sec,
-            up_bits_per_sec,
+            down_bits_per_sec: bits_per_sec,
+            up_bits_per_sec: bits_per_sec,
+            fail: false,
+        }
+    }
+
+    /// A provider whose `download`/`upload` both return `Err` — for testing
+    /// that a provider failure is recorded and skipped, never abandons the
+    /// caller (round runner, Task 4).
+    pub fn failing() -> Self {
+        Self {
+            down_bits_per_sec: 0.0,
+            up_bits_per_sec: 0.0,
+            fail: true,
         }
     }
 
@@ -213,10 +253,16 @@ impl MockProvider {
 #[async_trait::async_trait]
 impl SpeedProvider for MockProvider {
     async fn download(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
+        if self.fail {
+            return Err(EngineError::Other("mock provider configured to fail".to_string()));
+        }
         Ok(Self::synthesize(self.down_bits_per_sec, budget, max_bytes))
     }
 
     async fn upload(&self, budget: Duration, max_bytes: u64) -> Result<Throughput, EngineError> {
+        if self.fail {
+            return Err(EngineError::Other("mock provider configured to fail".to_string()));
+        }
         Ok(Self::synthesize(self.up_bits_per_sec, budget, max_bytes))
     }
 }

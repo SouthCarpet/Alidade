@@ -7,9 +7,13 @@
 
 mod probe;
 mod provider;
+mod round;
+
+use std::time::Duration;
 
 pub use probe::{probe_once, stats, PingSample, PingStats, Probe};
 pub use provider::{CloudflareProvider, EndpointConfig, MockProvider, SpeedProvider, Throughput};
+pub use round::{run_round, MetricSelection, RoundConfig, RoundResult};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -19,4 +23,12 @@ pub enum EngineError {
     Http(#[from] reqwest::Error),
     #[error("server returned status {0}")]
     Status(u16),
+    #[error("server did not respond within {0:?}")]
+    Timeout(Duration),
+    /// Catch-all for a provider-reported failure that isn't an HTTP/status/
+    /// timeout error (e.g. `MockProvider::failing()` in tests). The round
+    /// runner (Task 4) prefixes this with `"provider: "` when recording a
+    /// skip reason.
+    #[error("{0}")]
+    Other(String),
 }
