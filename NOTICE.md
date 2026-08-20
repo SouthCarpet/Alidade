@@ -1,6 +1,8 @@
 # Alidade notices
 
-Alidade is independent and is not part of, affiliated with, endorsed by, or connected to Alibaba Group or any other third party; any similarity of name is coincidental.
+Alidade is an independent project. It is not affiliated with, endorsed by, or connected to any
+company, organisation, or product. An alidade is a sighting instrument used in surveying; any
+resemblance to another name is coincidental.
 
 Copyright Michal
 

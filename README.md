@@ -33,4 +33,4 @@ See [INSTALL.md](INSTALL.md), [CHANGELOG.md](CHANGELOG.md), and [KNOWN_ISSUES.md
 
 Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
 
-Alidade is independent and is not part of, affiliated with, endorsed by, or connected to Alibaba Group or any other third party; any similarity of name is coincidental.
+Alidade is an independent project. It is not affiliated with, endorsed by, or connected to any company, organisation, or product. An alidade is a sighting instrument used in surveying; any resemblance to another name is coincidental.
