@@ -1,16 +1,21 @@
 name: CI
 
-# Deliberately NOT on every push to a branch. Day-to-day work is verified
-# locally (cargo build / test / clippy are the same three commands this job
-# runs), so a run per push mostly repeats a check that already passed.
+# Runs on a machine that knows nothing about any developer's disk. That is the
+# whole point: the first run on this repository failed because the app depended
+# on paths outside it, which no local check could have caught.
 #
-# It still runs where a local check cannot substitute:
-#   - release tags, so nothing ships without a clean build on a clean machine
-#   - pull requests, where the code is someone else's and has not been run here
+#   - push to main: the shared branch, verified from a clean checkout
+#   - release tags: nothing ships without a clean build
+#   - pull requests: code that has never run here
 #   - on demand: gh workflow run ci.yml --repo SouthCarpet/Alidade
+#
+# Feature branches are left out on purpose — work in progress does not need a
+# verdict on every save, and main plus PRs already cover what matters.
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   pull_request:
