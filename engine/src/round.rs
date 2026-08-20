@@ -5,7 +5,10 @@
 //! which phases actually run: an unselected phase's slot in `RoundResult`
 //! stays `None` — never a zero measurement. A provider `Err` is recorded in
 //! `skipped_reason` and its slot stays `None` too, but it never aborts the
-//! rest of the round — ping keeps running even when throughput fails.
+//! rest of the round — ping keeps running even when throughput fails. So is
+//! a phase that answered but left too little of its budget actually
+//! measured to trust the rate — see [`MIN_TRUSTWORTHY_LOAD_FRACTION`]; its
+//! bytes and duration still reach the store through `down_load`/`up_load`.
 //!
 //! A round carries its **kind** (D5a): `Full` when a throughput phase was
 //! attempted, `PingOnly` when the round is the idle-ping phase alone. The
@@ -43,6 +46,44 @@ use crate::{probe_once, stats, EngineError, PingSample, PingStats, Probe, SpeedP
 /// prevent: it made two of three live rounds report latency FALLING under
 /// load.
 pub const MIN_UNDER_LOAD_SAMPLES: u32 = 3;
+
+/// Fraction of `phase_budget` a throughput phase's own measured duration
+/// ([`crate::Throughput::duration`], not wall clock — see below) must reach
+/// before its rate is trustworthy enough to be stored as a plain number.
+///
+/// This is [`MIN_UNDER_LOAD_SAMPLES`]'s reasoning applied to the OTHER
+/// number a throughput phase reports. Soak row 13 moved one 25 MB chunk in
+/// 1.207 s of a 10 s budget, `capped = false` (the byte ceiling was not the
+/// reason it stopped — a later chunk's 429 was), and it was stored as a
+/// plain 207.37 Mbit/s that read exactly like every full-window row around
+/// it. The arithmetic was correct; the window was 12 % of what every other
+/// row represents, and nothing said so. That is the same "too little
+/// evidence" shape as one ping sample standing in for a series, and it gets
+/// the same fix: below the threshold, the rate is `None` with a reason
+/// recorded, never a value silently presented as if the whole window ran.
+///
+/// The daily budget's byte ceiling (D6) is exempt from this check — see
+/// `throughput_or_skip`. It is a deliberate, already-signalled truncation
+/// (`capped`, carried to the CSV) that spec D6 sanctions reading as a
+/// number; this threshold is for a phase that stopped for a reason NOTHING
+/// already flags.
+///
+/// The comparison reads `Throughput::duration`, the provider's own measured
+/// clock — never a round-runner wall-clock window. For [`crate::MockProvider`]
+/// (used by every round-runner test) that field always equals the requested
+/// budget by construction (see `MockProvider::synthesize`), so a test double
+/// that returns in near-zero wall-clock time is never mistaken for a
+/// truncated phase; for [`crate::CloudflareProvider`] it excludes only the
+/// per-chunk header round-trips documented on `Throughput::duration`, so a
+/// real, complete phase dominated by TCP slow start is not penalised either.
+///
+/// One half, not tuned to row 13's 12 %: slow start and per-request overhead
+/// are heaviest in a phase's first second or two, so by the halfway point
+/// their share of what was measured is already small. This threshold only
+/// has to separate "the deadline (or the ceiling) ended it" — both close to
+/// 100 % — from "something else cut it short" — row 13's 12 %. It does not
+/// need to be precise about where in between the line falls.
+pub const MIN_TRUSTWORTHY_LOAD_FRACTION: f64 = 0.5;
 
 /// Which phases of a round actually run. Unselected metrics (and an
 /// exhausted data budget) produce skip semantics: the matching slot in
@@ -101,6 +142,15 @@ pub struct LoadWindow {
     /// Ping samples that STARTED while that load was running. A sample in
     /// flight when the load ends still counts: it was issued under load.
     pub ping_samples: u32,
+    /// Bytes the phase actually moved, however the phase call came out.
+    /// This is recorded **regardless of** whether the phase's rate was
+    /// trustworthy enough to be stored as `down`/`up` (see
+    /// [`MIN_TRUSTWORTHY_LOAD_FRACTION`]): a discarded rate is still real
+    /// bytes that crossed the wire, and the store reads `bytes_down`/
+    /// `bytes_up` from here rather than from the (possibly `None`)
+    /// `Throughput`, so that evidence is never zeroed out along with a
+    /// rate that was not trusted.
+    pub bytes: u64,
 }
 
 /// Everything one round needs. `targets[0]` (if present) is the probe
@@ -131,12 +181,14 @@ pub struct RoundConfig {
 }
 
 /// One round's outcome. `down`/`up` are `None` when their metric was not
-/// selected or the provider errored (see `skipped_reason`). `ping_idle` is
-/// `None` only when ping was not selected (or had no target); `ping_down`/
-/// `ping_up` are additionally `None` when their throughput phase did not
-/// run **or** when its load window held fewer than
-/// [`MIN_UNDER_LOAD_SAMPLES`] samples — `down_load`/`up_load` tell the two
-/// apart.
+/// selected, the provider errored, or the phase's own measured duration fell
+/// under [`MIN_TRUSTWORTHY_LOAD_FRACTION`] of `phase_budget` (see
+/// `skipped_reason` for which); the bytes that phase actually moved still
+/// reach `down_load`/`up_load` regardless. `ping_idle` is `None` only when
+/// ping was not selected (or had no target); `ping_down`/`ping_up` are
+/// additionally `None` when their throughput phase did not run **or** when
+/// its load window held fewer than [`MIN_UNDER_LOAD_SAMPLES`] samples —
+/// `down_load`/`up_load` tell the two apart.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoundResult {
     pub started_at: SystemTime,
@@ -204,7 +256,7 @@ pub async fn run_round(provider: &dyn SpeedProvider, cfg: &RoundConfig) -> Round
         )
         .await;
         (
-            throughput_or_skip(result, &mut skip_reasons),
+            throughput_or_skip(result, cfg.phase_budget, "download", &mut skip_reasons),
             ping,
             Some(window),
         )
@@ -213,10 +265,13 @@ pub async fn run_round(provider: &dyn SpeedProvider, cfg: &RoundConfig) -> Round
     };
 
     // Whatever the download already spent comes off the round's ceiling, so
-    // a round can never move more than the daily budget had left.
+    // a round can never move more than the daily budget had left. This reads
+    // `down_load` (bytes actually moved), never `down` (the possibly-`None`,
+    // gated rate) — a discarded rate must not make the accounting think the
+    // budget still has bytes back that already crossed the wire.
     let upload_ceiling = cfg
         .byte_ceiling
-        .map(|ceiling| ceiling.saturating_sub(down.map_or(0, |t| t.bytes)));
+        .map(|ceiling| ceiling.saturating_sub(down_load.map_or(0, |w| w.bytes)));
 
     // Upload — same shape as download.
     let (up, ping_up, up_load) = if cfg.metrics.upload {
@@ -228,7 +283,7 @@ pub async fn run_round(provider: &dyn SpeedProvider, cfg: &RoundConfig) -> Round
         )
         .await;
         (
-            throughput_or_skip(result, &mut skip_reasons),
+            throughput_or_skip(result, cfg.phase_budget, "upload", &mut skip_reasons),
             ping,
             Some(window),
         )
@@ -259,20 +314,61 @@ pub async fn run_round(provider: &dyn SpeedProvider, cfg: &RoundConfig) -> Round
     }
 }
 
-/// `Ok` becomes the measured `Throughput`; `Err` is recorded as
-/// `"provider: <error>"` and collapses to `None` — a provider failure is
-/// data (a skip), not a panic and not a bogus zero reading.
+/// `Ok` becomes the measured `Throughput` — unless the phase ended for a
+/// reason nothing already flags and left too little of `phase_budget`
+/// actually measured (see [`MIN_TRUSTWORTHY_LOAD_FRACTION`]), in which case
+/// it is recorded as `"<label>: partial reading discarded (...)"` and
+/// collapses to `None`: not enough of the window ran to call it a normal
+/// reading. A `capped` phase is exempt — the byte ceiling (D6) is a
+/// deliberate, already-signalled truncation, sanctioned to read as a number.
+///
+/// `Err` is always recorded as `"<label>: provider: <error>"` and collapses
+/// to `None` — a provider failure is data (a skip), not a panic and not a
+/// bogus zero reading.
+///
+/// Either way the bytes and duration the phase actually produced are not
+/// lost: they live in the caller's `LoadWindow` (`down_load`/`up_load`),
+/// which is recorded regardless of what this function returns.
 fn throughput_or_skip(
     result: Result<Throughput, EngineError>,
+    phase_budget: Duration,
+    label: &str,
     skip_reasons: &mut Vec<String>,
 ) -> Option<Throughput> {
     match result {
-        Ok(t) => Some(t),
+        Ok(t) if t.capped || is_trustworthy(t.duration, phase_budget) => Some(t),
+        Ok(t) => {
+            skip_reasons.push(format!(
+                "{label}: partial reading discarded ({:.1}s of {:.1}s budget measured, {:.0}% \
+                 — below the {:.0}% needed to trust the rate)",
+                t.duration.as_secs_f64(),
+                phase_budget.as_secs_f64(),
+                load_fraction(t.duration, phase_budget) * 100.0,
+                MIN_TRUSTWORTHY_LOAD_FRACTION * 100.0,
+            ));
+            None
+        }
         Err(e) => {
-            skip_reasons.push(format!("provider: {e}"));
+            skip_reasons.push(format!("{label}: provider: {e}"));
             None
         }
     }
+}
+
+/// Share of `phase_budget` that `duration` covers. `phase_budget` is never
+/// zero in practice (every `RoundConfig` in this crate is built with a real
+/// budget); a zero budget reads as fully trustworthy rather than dividing by
+/// zero, since there is then no window to fall short of.
+fn load_fraction(duration: Duration, phase_budget: Duration) -> f64 {
+    if phase_budget.is_zero() {
+        1.0
+    } else {
+        duration.as_secs_f64() / phase_budget.as_secs_f64()
+    }
+}
+
+fn is_trustworthy(duration: Duration, phase_budget: Duration) -> bool {
+    load_fraction(duration, phase_budget) >= MIN_TRUSTWORTHY_LOAD_FRACTION
 }
 
 /// Run one throughput phase with the ping loop alongside it, and stop that
@@ -309,12 +405,14 @@ where
 
     let Some(target) = target else {
         let result = phase.await;
+        let bytes = result.as_ref().map_or(0, |t| t.bytes);
         return (
             result,
             None,
             LoadWindow {
                 duration: started.elapsed(),
                 ping_samples: 0,
+                bytes,
             },
         );
     };
@@ -335,6 +433,7 @@ where
     let window = LoadWindow {
         duration: load_duration,
         ping_samples: ping.sent,
+        bytes: result.as_ref().map_or(0, |t| t.bytes),
     };
     let under_load = (window.ping_samples >= MIN_UNDER_LOAD_SAMPLES).then_some(ping);
     (result, under_load, window)

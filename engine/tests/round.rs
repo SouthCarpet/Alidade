@@ -1,8 +1,12 @@
 use alidade_engine::{
-    run_round, MetricSelection, MockProvider, Probe, RoundConfig, RoundKind,
-    MIN_UNDER_LOAD_SAMPLES,
+    run_round, CloudflareProvider, EndpointConfig, MetricSelection, MockProvider, Probe,
+    RoundConfig, RoundKind, MIN_UNDER_LOAD_SAMPLES,
 };
 use std::time::{Duration, Instant};
+use wiremock::{
+    matchers::{method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 
 /// Ping interval and phase budget of the shape tests. The provider they use
 /// has a delay, so the load lasts long enough for a real under-load series.
@@ -326,5 +330,80 @@ async fn a_data_budget_ceiling_caps_the_round_and_says_so() {
         r.up.expect("upload ran").bytes,
         0,
         "the download spent the whole round ceiling; upload gets what is left, which is nothing"
+    );
+}
+
+/// **F1, mutation-checked, through a real `CloudflareProvider`.** This is the
+/// soak's row 13, reproduced: one chunk succeeds, the next 429s, `capped`
+/// stays `false` (nothing in this round used a byte ceiling), and the chunk
+/// that did succeed is a small fraction of the round's phase budget — the
+/// exact shape that let 25 MB in 1.207 s of a 10 s budget print a plain
+/// `207.37 Mbit/s` that read like every other row.
+///
+/// A test that only checked bytes survived (the existing provider-level
+/// `a_429_after_chunks_were_measured_keeps_the_bytes`) would still pass with
+/// the defect intact — see the assertion on `r.down` below, not on
+/// `window.bytes` alone.
+///
+/// Mutation: change the guard in `throughput_or_skip` from
+/// `Ok(t) if t.capped || is_trustworthy(t.duration, phase_budget)` to
+/// `Ok(t) if t.capped` (i.e. drop the trustworthiness check), and this fails
+/// with
+/// `r.down must not be a plain speed number after one chunk and a 429`
+/// `  left: Some(Throughput { ... })`
+/// ` right: None`.
+#[tokio::test]
+async fn a_download_partial_after_a_later_429_does_not_present_a_plain_speed_number() {
+    let server = MockServer::start().await;
+    let chunk: u64 = 256 * 1024;
+    Mock::given(method("GET"))
+        .and(path("/__down"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![7u8; chunk as usize]))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/__down"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    let provider = CloudflareProvider::with_download_chunk_bytes(
+        EndpointConfig {
+            download_url: format!("{}/__down", server.uri()),
+            upload_url: format!("{}/__up", server.uri()),
+        },
+        chunk,
+    );
+    // A generous budget, like production's 10 s phase: the one chunk that
+    // gets through is a small fraction of it, same as the soak.
+    let round_cfg = RoundConfig {
+        metrics: MetricSelection { download: true, upload: false, ping: false },
+        idle_ping: Duration::from_millis(1),
+        phase_budget: Duration::from_secs(2),
+        byte_ceiling: None,
+        ping_interval: Duration::from_millis(50),
+        targets: vec![],
+    };
+
+    let r = run_round(&provider, &round_cfg).await;
+
+    assert_eq!(
+        r.down, None,
+        "r.down must not be a plain speed number after one chunk and a 429"
+    );
+    let window = r.down_load.expect("the phase ran, so its window was recorded");
+    assert_eq!(
+        window.bytes, chunk,
+        "the bytes that really crossed the wire must not be lost along with the discarded rate"
+    );
+    assert!(
+        r.skipped_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("partial reading discarded"),
+        "the reason must say a reading was discarded, not leave a blank cell: {:?}",
+        r.skipped_reason
     );
 }

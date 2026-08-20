@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use alidade_engine::{
     probe_once, run_round, CloudflareProvider, LoadWindow, MetricSelection, PingSample,
-    PingStats, Probe, RoundKind, Scheduler, Settings, TargetSpec,
+    PingStats, Probe, RoundKind, RoundPlan, RoundResult, Scheduler, Settings, TargetSpec,
 };
 use alidade_store::Store;
 use chrono::{NaiveDate, TimeZone, Utc};
@@ -251,15 +251,15 @@ async fn continuous(
         let plan = scheduler.plan_next_round(started);
         scheduler.record_round_start(started, plan.kind);
         let metrics = intersect_metrics(plan.metrics, metrics_for(&settings, &metric_args));
-        let mut result =
-            run_round(&provider, &round_config(&settings, metrics, plan.byte_ceiling)).await;
-        if result.skipped_reason.is_none() {
-            result.skipped_reason = plan.skip_reason;
-        }
+        let result = run_round(&provider, &round_config(&settings, metrics, plan.byte_ceiling)).await;
+        let result = apply_plan(result, &plan);
+        // Bytes actually moved, not `result.down`/`result.up` (a rate F1
+        // discarded as too short to trust is still bytes that crossed the
+        // wire and must still count against the daily budget).
         let bytes = result
-            .down
-            .map_or(0, |throughput| throughput.bytes)
-            .saturating_add(result.up.map_or(0, |throughput| throughput.bytes));
+            .down_load
+            .map_or(0, |window| window.bytes)
+            .saturating_add(result.up_load.map_or(0, |window| window.bytes));
         scheduler.record_bytes(started, bytes);
         // F3: only the round's own aggregate columns are stored here — see
         // the comment on `run_and_store` for why its raw idle/under-load
@@ -280,6 +280,23 @@ async fn continuous(
         tokio::select! { _ = tokio::signal::ctrl_c() => break, _ = tokio::time::sleep(wait) => {} }
     }
     Ok(())
+}
+
+/// F3: the stored kind must say what the round WAS PLANNED to be, with the
+/// skip reason saying what happened to it. `run_round` infers `kind` from
+/// the metrics it was actually given, which is right for `single` (no plan
+/// exists) but wrong here: a daily-budget skip plans a `Full` round and then
+/// clears its metrics so `run_round` never attempts throughput, so its own
+/// inference reads that as `PingOnly` — indistinguishable in the record from
+/// an ordinary five-minute ping round, even though `plan.skip_reason` says
+/// exactly why the throughput never ran. `plan.kind` is always the round
+/// this call site meant to run, so it always wins.
+fn apply_plan(mut result: RoundResult, plan: &RoundPlan) -> RoundResult {
+    result.kind = plan.kind;
+    if result.skipped_reason.is_none() {
+        result.skipped_reason.clone_from(&plan.skip_reason);
+    }
+    result
 }
 
 /// A prober callable, boxed the same way `boxed_probe_once` boxes the real
@@ -749,6 +766,78 @@ mod tests {
         assert!(INTERVAL_REPLACED.contains("--ping-every"));
     }
 
+    fn ping_only_result() -> RoundResult {
+        RoundResult {
+            started_at: SystemTime::now(),
+            kind: RoundKind::PingOnly,
+            down: None,
+            up: None,
+            ping_idle: None,
+            ping_down: None,
+            ping_up: None,
+            down_load: None,
+            up_load: None,
+            capped: false,
+            skipped_reason: None,
+        }
+    }
+
+    /// F3, mutation-checked. A daily-budget skip is planned as
+    /// `RoundKind::Full` with a `skip_reason` (`plan_next_round`,
+    /// `engine/src/schedule.rs`), but `run_round` clears `metrics.download`/
+    /// `.upload` first and then infers its own `kind` from what it was
+    /// given — so its output for exactly this round reads `PingOnly`,
+    /// indistinguishable from an ordinary five-minute ping round. `apply_plan`
+    /// must restore what the round was actually planned to be.
+    ///
+    /// Mutation: delete `result.kind = plan.kind;` from `apply_plan` — this
+    /// fails with
+    /// `assertion `left == right` failed: the round was planned as full; a budget skip must not read as an ordinary ping round`
+    /// `  left: PingOnly`
+    /// ` right: Full`
+    #[test]
+    fn a_budget_skip_keeps_its_planned_kind_not_the_cleared_metrics_kind() {
+        let result = ping_only_result();
+        let plan = RoundPlan {
+            kind: RoundKind::Full,
+            metrics: MetricSelection { download: false, upload: false, ping: true },
+            byte_ceiling: Some(0),
+            skip_reason: Some("daily budget exhausted".to_string()),
+        };
+
+        let applied = apply_plan(result, &plan);
+
+        assert_eq!(
+            applied.kind,
+            RoundKind::Full,
+            "the round was planned as full; a budget skip must not read as an ordinary ping round"
+        );
+        assert_eq!(applied.skipped_reason.as_deref(), Some("daily budget exhausted"));
+    }
+
+    /// `apply_plan` must not overwrite a skip reason `run_round` already set
+    /// (a provider error, say) with the plan's — the two are different facts
+    /// and the plan's is only a fallback for when `run_round` had none of
+    /// its own.
+    #[test]
+    fn apply_plan_keeps_run_rounds_own_skip_reason_over_the_plans() {
+        let mut result = ping_only_result();
+        result.skipped_reason = Some("download: provider: server returned status 503".to_string());
+        let plan = RoundPlan {
+            kind: RoundKind::PingOnly,
+            metrics: MetricSelection { download: false, upload: false, ping: true },
+            byte_ceiling: None,
+            skip_reason: None,
+        };
+
+        let applied = apply_plan(result, &plan);
+
+        assert_eq!(
+            applied.skipped_reason.as_deref(),
+            Some("download: provider: server returned status 503")
+        );
+    }
+
     /// F4's print rule, at the level a unit test can hold it: an under-load
     /// ping that is absent because the load was too short must not read the
     /// same as one that never ran.
@@ -760,6 +849,7 @@ mod tests {
             Some(LoadWindow {
                 duration: Duration::from_millis(4300),
                 ping_samples: 2,
+                bytes: 500_000,
             }),
         );
         assert_eq!(no_phase, "skipped");

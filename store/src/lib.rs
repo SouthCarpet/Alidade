@@ -8,7 +8,7 @@ mod schema;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use alidade_engine::{LoadWindow, PingSample, PingStats, RoundKind, RoundResult, Throughput};
+use alidade_engine::{LoadWindow, PingSample, PingStats, RoundKind, RoundResult};
 use rusqlite::{params, Connection, Row};
 
 /// Errors from opening, migrating, querying, or exporting the store.
@@ -42,6 +42,10 @@ pub struct RoundRow {
     /// speeds was asked and failed or was skipped — `skipped_reason` says
     /// which.
     pub mode: RoundKind,
+    /// NULL when the metric was not selected, the provider errored, or the
+    /// phase's own measured window fell too short of its budget to trust
+    /// (F1) — `skipped_reason` says which. `bytes_down`/`bytes_up` below are
+    /// independent of this: a discarded rate still moved real bytes.
     pub down_bps: Option<f64>,
     pub up_bps: Option<f64>,
     pub ping_idle_ms: Option<f64>,
@@ -150,8 +154,8 @@ impl Store {
             r.ping_idle.map(|p| p.loss_pct),
             r.ping_down.map(|p| p.loss_pct),
             r.ping_up.map(|p| p.loss_pct),
-            bytes_or_zero(r.down),
-            bytes_or_zero(r.up),
+            bytes_moved(r.down_load),
+            bytes_moved(r.up_load),
             load_ms(r.down_load),
             load_ms(r.up_load),
             load_samples(r.down_load),
@@ -348,8 +352,12 @@ fn ping_jitter(stats: Option<PingStats>) -> Option<f64> {
     stats.and_then(|s| s.jitter_ms)
 }
 
-fn bytes_or_zero(t: Option<Throughput>) -> i64 {
-    t.map(|t| t.bytes as i64).unwrap_or(0)
+/// Bytes a phase actually moved, read from its `LoadWindow` rather than from
+/// `down`/`up`: a partial reading that got discarded to `None` (F1) still
+/// moved real bytes, and this must not zero them out along with the rate
+/// that was not trusted. `None` (the phase never ran) is 0 bytes.
+fn bytes_moved(window: Option<LoadWindow>) -> i64 {
+    window.map(|w| w.bytes as i64).unwrap_or(0)
 }
 
 /// How long the load actually lasted, in ms. NULL when the phase did not run

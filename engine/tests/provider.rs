@@ -4,7 +4,7 @@ use alidade_engine::{
 };
 use std::time::{Duration, Instant};
 use wiremock::{
-    matchers::{method, path, query_param},
+    matchers::{method, path},
     Match, Mock, MockServer, Request, Respond, ResponseTemplate,
 };
 
@@ -55,11 +55,12 @@ impl Match for BytesAtLeast {
 #[tokio::test]
 async fn download_is_time_bounded_and_reports_measured_bytes() {
     let server = MockServer::start().await;
-    // 2 MB body, served instantly; the provider must stop at the budget or the byte cap.
+    // The real `__down` contract (F4): serves exactly what is asked, refuses
+    // the 403 ceiling. This request never gets near it, but the mock still
+    // enforces the same ceiling every other `__down` test does.
     Mock::given(method("GET"))
         .and(path("/__down"))
-        .and(query_param("bytes", "2000000"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![7u8; 2_000_000]))
+        .respond_with(LikeCloudflareDown)
         .mount(&server)
         .await;
     let p = CloudflareProvider::new(EndpointConfig {
@@ -115,9 +116,12 @@ async fn a_server_error_is_an_error_not_a_zero_reading() {
 async fn download_stops_on_the_clock_not_the_byte_cap() {
     let server = MockServer::start().await;
     let max_bytes: u64 = 64_000_000; // 64 MB — no budget this small can drain it
+    // F4: `LikeCloudflareDown` serves exactly the requested `bytes` (up to
+    // 64 MB here) and enforces the real 403 ceiling, same as every other
+    // `__down` mock in this file.
     Mock::given(method("GET"))
         .and(path("/__down"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![7u8; max_bytes as usize]))
+        .respond_with(LikeCloudflareDown)
         .mount(&server)
         .await;
     let p = CloudflareProvider::new(EndpointConfig {
