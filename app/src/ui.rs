@@ -20,10 +20,20 @@ pub fn font_medium() -> Font {
     Font { weight: iced::font::Weight::Medium, ..Font::with_name("Inter") }
 }
 
+/// Tabular-numeral fallback (same Tier-2 gap as the gallery's own
+/// `font_numeric`, see `design/gallery-iced/src/main.rs`'s module doc):
+/// `iced_core::Text` has no OpenType feature switch, so there is no way to
+/// ask cosmic-text for `tnum`/`lnum` on Inter. A monospace digit run is
+/// tabular by construction, so every KPI/table digit run uses this instead
+/// of `font_regular`/`font_medium` — never the label next to it.
+pub fn font_numeric() -> Font {
+    Font::MONOSPACE
+}
+
 impl App {
-    /// Renders the five-screen tab strip and an (as yet empty) content
-    /// area — Task 1's whole job per the plan's Step 3. Screen bodies land
-    /// in Tasks 2, 4 and 5.
+    /// Renders the five-screen tab strip and the active screen's content.
+    /// Home has real content as of Task 2; the other four still render
+    /// Task 1's empty placeholder card until Tasks 4-5 build them.
     pub fn view(&self) -> Element<'_, Message> {
         // Theme switching is Task 5's job (the Settings screen); this task
         // hardcodes light.
@@ -31,7 +41,10 @@ impl App {
 
         let tabs = row(Screen::ALL.into_iter().map(|screen| tab(palette, screen, self.screen))).spacing(SPACE.s6);
 
-        let content = palette.card(false, Space::new().width(Fill).height(Fill));
+        let content: Element<'_, Message> = match self.screen {
+            Screen::Home => crate::screens::home::view(self),
+            _ => palette.card(false, Space::new().width(Fill).height(Fill)),
+        };
 
         let body = column![tabs, content].spacing(SPACE.s6).width(Fill).height(Fill).padding(SPACE.s6);
 

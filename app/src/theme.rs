@@ -6,14 +6,14 @@
 //! literal (point 2: tokens are the only colours and times). This module
 //! is the ONLY place in the app that reads `design_tokens`.
 //!
-//! This task's window shell (the tab strip + an empty content area) only
-//! exercises `bg`/`text`/`muted`/`accent`/`card`/`btn_ghost`. The rest of
-//! this surface (`well`, `raised`, `focus_ring`, `btn_primary`,
-//! `btn_secondary`, `btn_danger`) is the Task 1 interface contract Tasks
-//! 2-6 build screens against (see the plan's Task 1 "Interfaces" line) —
-//! unused here by design, same "defined for a later consumer" shape as
-//! `design-tokens`'s own `schema.rs` dead-code allowance.
-#![allow(dead_code)]
+//! Task 1's window shell and Task 2's Home screen between them now exercise
+//! `bg`/`text`/`muted`/`accent`/`well`/`raised`/`card`/`btn_primary`/
+//! `btn_secondary`/`btn_ghost`. `focus_ring` and `btn_danger` stay for
+//! Tasks 4-6 (a settings/targets form needs both; Continuous/Settings need
+//! a danger action) — the Task 1 interface contract those tasks build
+//! screens against (see the plan's Task 1 "Interfaces" line), same
+//! "defined for a later consumer" shape as `design-tokens`'s own
+//! `schema.rs` dead-code allowance.
 
 use design_tokens::apps::alidade::{DARK, LIGHT};
 use design_tokens::scale::{RADIUS, SHADOW_RAISE_DARK, SHADOW_RAISE_LIGHT, SPACE};
