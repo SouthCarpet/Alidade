@@ -11,16 +11,17 @@ context: fork
 **Target: $ARGUMENTS**
 
 - If target is a technology/API name: research it and capture findings
-- If target is a Python module name: research its documentation
+- If target is a Rust crate name: research its documentation
 - If target is empty: ask what to research
 
 **Execute these steps:**
 
 1. **Fetch official documentation first** — do not rely on memory or training data
 2. Search for examples, changelogs, and best practices
-3. Identify what is relevant to this YouTube automation pipeline
-4. Extract key facts as atomic engine spec notes
-5. Identify which existing engines would be affected
+3. Identify what is relevant to Alidade (link-measurement engine/store/cli/app
+   workspace; Windows-first, no telemetry beyond the configured measurement)
+4. Extract key facts as atomic notes under `.vault/`
+5. Identify which workspace crate(s) (`engine`, `store`, `cli`, `app`) would be affected
 6. Add to relevant system maps
 
 **START NOW.**
@@ -44,30 +45,28 @@ For APIs, always fetch:
 
 ## Research Sources
 
-For AI APIs and models:
+For measurement/throughput APIs (e.g. Cloudflare speed-test endpoints):
 - Official API documentation (fetch directly)
-- Model capability comparisons
-- Rate limits and pricing
-- Integration patterns with Python
+- Rate limits, auth requirements (none expected — keep it that way)
+- Response shape and accuracy caveats
 
-For Python libraries:
-- PyPI documentation (fetch directly)
+For Rust crates:
+- docs.rs / crates.io documentation (fetch directly)
 - GitHub README
-- Usage examples
+- Usage examples, MSRV, feature flags
 
 ## Extraction Focus
 
-When researching for this pipeline, focus on:
+When researching for this app, focus on:
 
 | Category | What to Capture |
 |----------|-----------------|
-| Auth fields | Exact field names as shown in official docs |
 | API Interface | Endpoint, parameters, response shape |
-| Model capabilities | What it can/cannot do |
-| Rate limits | Requests/min, token limits |
-| Cost | Per-token or per-request pricing |
-| Integration pattern | How to call it from Python |
-| Failure modes | Common errors, timeouts, quotas |
+| Windows/ICMP specifics | Any interaction with the IP Helper API path (`cfg(windows)`) |
+| Crate capabilities | Feature flags, MSRV, what it can/cannot do |
+| Rate limits | Requests/min if the source imposes any |
+| Integration pattern | How to call it from Rust (async/tokio, error type) |
+| Failure modes | Common errors, timeouts, offline behavior |
 
 ## Output
 
