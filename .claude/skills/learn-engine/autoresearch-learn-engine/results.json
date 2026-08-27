@@ -1,0 +1,23 @@
+{
+  "skill_name": "learn-engine",
+  "status": "complete",
+  "current_experiment": 0,
+  "baseline_score": 100.0,
+  "best_score": 100.0,
+  "experiments": [
+    {
+      "id": 0,
+      "score": 16,
+      "max_score": 16,
+      "pass_rate": 100.0,
+      "status": "baseline",
+      "description": "original skill — no changes. All 4 tests passed all 4 evals."
+    }
+  ],
+  "eval_breakdown": [
+    {"name": "Atomic findings (3+ distinct)", "pass_count": 4, "total": 4},
+    {"name": "Pipeline relevance", "pass_count": 4, "total": 4},
+    {"name": "Output structure compliance", "pass_count": 4, "total": 4},
+    {"name": "Actionable specifics (2+ concrete details)", "pass_count": 4, "total": 4}
+  ]
+}

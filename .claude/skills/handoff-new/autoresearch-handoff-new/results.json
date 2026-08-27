@@ -1,0 +1,26 @@
+{
+  "skill_name": "handoff-new",
+  "status": "pending",
+  "current_experiment": 0,
+  "baseline_score": null,
+  "best_score": null,
+  "experiments": [],
+  "eval_breakdown": [
+    {"name": "Loads and validates handoff JSON correctly", "pass_count": 0, "total": 4},
+    {"name": "Restates objective + first step + constraints (concise)", "pass_count": 0, "total": 4},
+    {"name": "Verifies state before executing (file/code checks)", "pass_count": 0, "total": 4},
+    {"name": "Begins execution immediately (not re-analysis)", "pass_count": 0, "total": 4},
+    {"name": "Warns on branch mismatch or staleness when applicable", "pass_count": 0, "total": 4},
+    {"name": "References similar_bugs before implementing", "pass_count": 0, "total": 4},
+    {"name": "Reports status in correct output format", "pass_count": 0, "total": 4},
+    {"name": "Handles missing/optional fields gracefully", "pass_count": 0, "total": 4}
+  ],
+  "test_inputs": [
+    "Fresh handoff — 5-step plan, 2 done, architecture decisions to preserve",
+    "Stale handoff (72h) + branch mismatch — must warn before proceeding",
+    "Debug handoff — root cause found, bugs_or_earlier_fixes to avoid",
+    "Minimal handoff — only required fields, no metadata — graceful handling"
+  ],
+  "verdict": null,
+  "verdict_detail": "Waiting for handoff-old to complete..."
+}

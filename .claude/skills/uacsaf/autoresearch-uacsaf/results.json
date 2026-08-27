@@ -1,0 +1,31 @@
+{
+  "skill_name": "uacsaf",
+  "status": "complete",
+  "current_experiment": 0,
+  "baseline_score": 100.0,
+  "best_score": 100.0,
+  "experiments": [
+    {
+      "id": 0,
+      "score": 16,
+      "max_score": 16,
+      "pass_rate": 100.0,
+      "status": "baseline",
+      "description": "Baseline — 4 tests: Flask 500 bug hunt, security review of monetization_compliance, channel_memory data persistence, gemini_trends performance incident"
+    }
+  ],
+  "eval_breakdown": [
+    {"name": "Mode classified", "pass_count": 4, "total": 4},
+    {"name": "Structured findings with meta-fields", "pass_count": 4, "total": 4},
+    {"name": "Evidence-based (specific code locations)", "pass_count": 4, "total": 4},
+    {"name": "Fix proposed (MINIMAL_FIX or PATCH_PLAN)", "pass_count": 4, "total": 4}
+  ],
+  "test_inputs": [
+    "Debug why Flask route errors return double-500 (BUG_HUNT on app.py error handlers)",
+    "Security review of monetization_compliance.py input handling (SECURITY_REVIEW)",
+    "Root-cause analysis of channel_memory.py data persistence (CODE_REVIEW_ONLY)",
+    "Performance analysis of gemini_trends.py API call patterns (PERFORMANCE_INCIDENT)"
+  ],
+  "verdict": "at_ceiling",
+  "verdict_detail": "UACSAF baseline scored 100% across all 4 evals and 4 diverse debug modes. The skill prompt is already highly effective — no optimization needed."
+}

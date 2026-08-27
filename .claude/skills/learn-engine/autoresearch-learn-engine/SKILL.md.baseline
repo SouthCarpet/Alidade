@@ -1,0 +1,73 @@
+---
+name: learn-engine
+description: Research a new technology, pattern, or architectural concept and capture findings as engine specs. Use when adding a new engine, evaluating a new AI model, or understanding an external API. Triggers on "/learn", "/learn [topic]", "research this", "learn about", "investigate".
+user-invocable: true
+allowed-tools: Read, Write, Glob, WebSearch, WebFetch
+context: fork
+---
+
+## EXECUTE NOW
+
+**Target: $ARGUMENTS**
+
+- If target is a technology/API name: research it and capture findings
+- If target is a Python module name: research its documentation
+- If target is empty: ask what to research
+
+**Execute these steps:**
+
+1. Search for documentation, examples, and best practices
+2. Identify what is relevant to this YouTube automation pipeline
+3. Extract key facts as atomic engine spec notes
+4. Identify which existing engines would be affected
+5. Add to relevant system maps
+
+**START NOW.**
+
+---
+
+# Learn-Engine
+
+Research external knowledge and integrate it into the vault.
+
+## Research Sources
+
+For AI APIs and models:
+- Official API documentation
+- Model capability comparisons
+- Rate limits and pricing
+- Integration patterns with Python
+
+For Python libraries:
+- PyPI documentation
+- GitHub README
+- Usage examples
+
+## Extraction Focus
+
+When researching for this pipeline, focus on:
+
+| Category | What to Capture |
+|----------|-----------------|
+| API Interface | Endpoint, parameters, response shape |
+| Model capabilities | What it can/cannot do |
+| Rate limits | Requests/min, token limits |
+| Cost | Per-token or per-request pricing |
+| Integration pattern | How to call it from Python |
+| Failure modes | Common errors, timeouts, quotas |
+
+## Output
+
+```
+## Learn Complete: [topic]
+
+### Findings
+- [[finding spec]] — [key fact]
+- [[finding spec]] — [key fact]
+
+### Impact on Existing Engines
+- [[engine spec]] needs updating because [reason]
+
+### New Capabilities Identified
+- [what this enables in the pipeline]
+```

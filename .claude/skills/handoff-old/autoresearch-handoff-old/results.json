@@ -1,0 +1,35 @@
+{
+  "skill_name": "handoff-old",
+  "status": "complete",
+  "current_experiment": 0,
+  "baseline_score": 100.0,
+  "best_score": 100.0,
+  "experiments": [
+    {
+      "id": 0,
+      "score": 32,
+      "max_score": 32,
+      "pass_rate": 100.0,
+      "status": "baseline",
+      "description": "Baseline — 8 evals × 4 scenarios: partial work, clean completion, debug diagnosis, exploratory with dead ends"
+    }
+  ],
+  "eval_breakdown": [
+    {"name": "Valid JSON with all 13 schema fields", "pass_count": 4, "total": 4},
+    {"name": "Git state gathered (branch, uncommitted, last_commit)", "pass_count": 4, "total": 4},
+    {"name": "Execution plan is actionable (concrete steps, not analysis)", "pass_count": 4, "total": 4},
+    {"name": "Starter prompt is self-contained", "pass_count": 4, "total": 4},
+    {"name": "current_state correctly triaged (done/partial/not_started)", "pass_count": 4, "total": 4},
+    {"name": "modified_files references real files with descriptions", "pass_count": 4, "total": 4},
+    {"name": "No noise — dead ends and brainstorming filtered out", "pass_count": 4, "total": 4},
+    {"name": "architecture_decisions include decision + reason", "pass_count": 4, "total": 4}
+  ],
+  "test_inputs": [
+    "Halfway through retry logic — 3 files modified, 2 tests failing",
+    "Clean completion — new feature done, all tests passing",
+    "Debug session — root cause found across 4 files, not yet fixed",
+    "Exploratory session — many dead ends, 1 useful finding"
+  ],
+  "verdict": "at_ceiling",
+  "verdict_detail": "Handoff-old scored 100% (32/32) across 8 evals and 4 diverse scenarios even with doubled eval criteria. Correctly handled: empty modified_files for debug sessions, dead-end filtering to similar_bugs_or_earlier_fixes, empty architecture_decisions for CRUD work, and self-contained starter prompts with file:line references. No optimization needed."
+}

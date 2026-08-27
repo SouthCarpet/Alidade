@@ -1,0 +1,18 @@
+{
+  "skill_name": "gen-test",
+  "status": "complete",
+  "current_experiment": 2,
+  "baseline_score": 93.75,
+  "best_score": 93.75,
+  "experiments": [
+    {"id": 0, "score": 15, "max_score": 16, "pass_rate": 93.75, "status": "baseline", "description": "original skill — 3/4 modules all-pass, monetization_compliance had 4 assertion failures"},
+    {"id": 1, "score": 15, "max_score": 16, "pass_rate": 93.75, "status": "discard", "description": "added verify-before-writing + fix-on-fail — no improvement"},
+    {"id": 2, "score": 15, "max_score": 16, "pass_rate": 93.75, "status": "discard", "description": "added structural assertion rules — no improvement verified"}
+  ],
+  "eval_breakdown": [
+    {"name": "Tests run without errors", "pass_count": 7, "total": 8},
+    {"name": "Coverage categories (3+ of happy/edge/error/mock)", "pass_count": 8, "total": 8},
+    {"name": "All test functions have docstrings", "pass_count": 8, "total": 8},
+    {"name": "No real HTTP (all APIs mocked)", "pass_count": 8, "total": 8}
+  ]
+}

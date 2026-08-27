@@ -1,0 +1,4 @@
+experiment	score	max_score	pass_rate	status	description
+0	15	16	93.75%	baseline	original skill — 3/4 tests all-pass, 1/4 had 4 assertion failures in monetization_compliance
+1	15	16	93.75%	discard	added "verify before writing" + "fix on fail" — monetization_compliance still had 5 assertion failures
+2	15	16	93.75%	discard	added "assert structural properties" for complex logic — agent still stalled; no improvement verified

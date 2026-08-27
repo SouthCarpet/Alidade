@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autoresearch: handoff-new</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fafbfc; color: #2d3748; padding: 24px; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  .subtitle { color: #718096; margin-bottom: 24px; font-size: 0.9rem; }
+  .status-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+  .status-running { background: #ebf8ff; color: #2b6cb0; }
+  .status-complete { background: #f0fff4; color: #276749; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: white; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .card-label { font-size: 0.75rem; color: #a0aec0; text-transform: uppercase; letter-spacing: 0.05em; }
+  .card-value { font-size: 1.6rem; font-weight: 700; margin-top: 4px; }
+  .chart-container { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  th { background: #f7fafc; text-align: left; padding: 10px 14px; font-size: 0.78rem; color: #718096; text-transform: uppercase; letter-spacing: 0.04em; }
+  td { padding: 10px 14px; border-top: 1px solid #edf2f7; font-size: 0.88rem; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.75rem; font-weight: 600; }
+  .tag-baseline { background: #ebf8ff; color: #2b6cb0; }
+  .tag-keep { background: #f0fff4; color: #276749; }
+  .tag-discard { background: #fff5f5; color: #c53030; }
+  .eval-bar { height: 8px; border-radius: 4px; background: #edf2f7; overflow: hidden; }
+  .eval-fill { height: 100%; border-radius: 4px; background: #68d391; }
+  .section-title { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; }
+  .verdict-box { background: #ebf8ff; border: 2px solid #bee3f8; border-radius: 10px; padding: 16px 20px; margin-bottom: 24px; }
+  .verdict-label { font-size: 0.8rem; color: #2b6cb0; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .verdict-text { font-size: 1rem; margin-top: 6px; color: #2d3748; }
+</style>
+</head>
+<body>
+<h1>Autoresearch: handoff-new</h1>
+<p class="subtitle">Start-of-session handoff consumer — <span id="statusBadge" class="status-badge status-running">Running Baseline</span></p>
+
+<div class="verdict-box">
+  <div class="verdict-label">Verdict</div>
+  <div class="verdict-text" id="verdictText">Baseline in progress...</div>
+</div>
+
+<div class="cards">
+  <div class="card"><div class="card-label">Baseline</div><div class="card-value" id="baseline">—</div></div>
+  <div class="card"><div class="card-label">Best Score</div><div class="card-value" id="best">—</div></div>
+  <div class="card"><div class="card-label">Experiments</div><div class="card-value" id="currentExp">0</div></div>
+  <div class="card"><div class="card-label">Improvement</div><div class="card-value" id="improvement">—</div></div>
+</div>
+
+<div class="chart-container"><canvas id="chart" height="80"></canvas></div>
+
+<div class="section-title">Experiments</div>
+<table><thead><tr><th>#</th><th>Score</th><th>Pass Rate</th><th>Status</th><th>Description</th></tr></thead><tbody id="expBody"></tbody></table>
+
+<div class="section-title" style="margin-top:24px;">Eval Breakdown</div>
+<table><thead><tr><th>Eval</th><th>Pass Rate</th><th>Visual</th></tr></thead><tbody id="evalBody"></tbody></table>
+
+<div class="section-title" style="margin-top:24px;">Test Inputs</div>
+<table>
+  <thead><tr><th>#</th><th>Scenario</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Fresh handoff — 5-step plan, 2 done, architecture decisions to preserve</td></tr>
+    <tr><td>2</td><td>Stale handoff (72h) + branch mismatch — must warn before proceeding</td></tr>
+    <tr><td>3</td><td>Debug handoff — root cause found, bugs_or_earlier_fixes to avoid</td></tr>
+    <tr><td>4</td><td>Minimal handoff — only required fields, no metadata — graceful handling</td></tr>
+  </tbody>
+</table>
+
+<script>
+let chart;
+async function refresh() {
+  try {
+    const resp = await fetch('results.json?t=' + Date.now());
+    const d = await resp.json();
+    document.getElementById('statusBadge').textContent = d.status === 'complete' ? 'Complete' : 'Running Baseline';
+    document.getElementById('statusBadge').className = 'status-badge ' + (d.status === 'complete' ? 'status-complete' : 'status-running');
+    if (d.status === 'running') document.getElementById('statusBadge').textContent = 'Running Exp ' + d.current_experiment;
+    if (d.baseline_score !== null) document.getElementById('baseline').textContent = d.baseline_score.toFixed(1) + '%';
+    if (d.best_score !== null) document.getElementById('best').textContent = d.best_score.toFixed(1) + '%';
+    document.getElementById('currentExp').textContent = d.current_experiment;
+    if (d.baseline_score !== null && d.best_score !== null) {
+      const imp = d.best_score - d.baseline_score;
+      document.getElementById('improvement').textContent = (imp >= 0 ? '+' : '') + imp.toFixed(1) + '%';
+      document.getElementById('improvement').style.color = imp > 0 ? '#276749' : '#718096';
+    }
+    if (d.verdict_detail) document.getElementById('verdictText').textContent = d.verdict_detail;
+    if (d.experiments && d.experiments.length > 0) {
+      const labels = d.experiments.map(e => e.id === 0 ? 'Baseline' : 'Exp ' + e.id);
+      const data = d.experiments.map(e => e.pass_rate);
+      const colors = d.experiments.map(e => e.status === 'baseline' ? '#63b3ed' : e.status === 'keep' ? '#68d391' : '#fc8181');
+      if (chart) chart.destroy();
+      chart = new Chart(document.getElementById('chart'), {
+        type: 'line', data: { labels, datasets: [{ label: 'Pass Rate %', data, borderColor: '#4299e1', backgroundColor: 'rgba(66,153,225,0.1)', fill: true, tension: 0.3, pointBackgroundColor: colors, pointRadius: 6 }] },
+        options: { scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } }, plugins: { legend: { display: false } } }
+      });
+    }
+    let rows = '';
+    (d.experiments || []).forEach(e => {
+      const cls = e.status === 'baseline' ? 'tag-baseline' : e.status === 'keep' ? 'tag-keep' : 'tag-discard';
+      rows += `<tr><td>${e.id}</td><td>${e.score}/${e.max_score}</td><td>${e.pass_rate.toFixed(1)}%</td><td><span class="tag ${cls}">${e.status}</span></td><td>${e.description}</td></tr>`;
+    });
+    document.getElementById('expBody').innerHTML = rows;
+    let erows = '';
+    (d.eval_breakdown || []).forEach(ev => {
+      const pct = ev.total > 0 ? (ev.pass_count / ev.total * 100).toFixed(0) : 0;
+      erows += `<tr><td>${ev.name}</td><td>${ev.pass_count}/${ev.total} (${pct}%)</td><td><div class="eval-bar"><div class="eval-fill" style="width:${pct}%"></div></div></td></tr>`;
+    });
+    document.getElementById('evalBody').innerHTML = erows;
+  } catch(e) {}
+}
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
