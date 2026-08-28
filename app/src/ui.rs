@@ -17,7 +17,10 @@ pub fn font_regular() -> Font {
 }
 
 pub fn font_medium() -> Font {
-    Font { weight: iced::font::Weight::Medium, ..Font::with_name("Inter") }
+    Font {
+        weight: iced::font::Weight::Medium,
+        ..Font::with_name("Inter")
+    }
 }
 
 /// Tabular-numeral fallback (same Tier-2 gap as the gallery's own
@@ -32,21 +35,30 @@ pub fn font_numeric() -> Font {
 
 impl App {
     /// Renders the five-screen tab strip and the active screen's content.
-    /// Home has real content as of Task 2; the other four still render
-    /// Task 1's empty placeholder card until Tasks 4-5 build them.
+    /// Settings still renders Task 1's empty placeholder until Task 5.
     pub fn view(&self) -> Element<'_, Message> {
         // Theme switching is Task 5's job (the Settings screen); this task
         // hardcodes light.
         let palette = Palette::light();
 
-        let tabs = row(Screen::ALL.into_iter().map(|screen| tab(palette, screen, self.screen))).spacing(SPACE.s6);
+        let tabs = row(Screen::ALL
+            .into_iter()
+            .map(|screen| tab(palette, screen, self.screen)))
+        .spacing(SPACE.s6);
 
         let content: Element<'_, Message> = match self.screen {
             Screen::Home => crate::screens::home::view(self),
-            _ => palette.card(false, Space::new().width(Fill).height(Fill)),
+            Screen::Continuous => crate::screens::continuous::view(self),
+            Screen::PingMonitor => crate::screens::ping_monitor::view(self),
+            Screen::History => crate::screens::history::view(self),
+            Screen::Settings => palette.card(false, Space::new().width(Fill).height(Fill)),
         };
 
-        let body = column![tabs, content].spacing(SPACE.s6).width(Fill).height(Fill).padding(SPACE.s6);
+        let body = column![tabs, content]
+            .spacing(SPACE.s6)
+            .width(Fill)
+            .height(Fill)
+            .padding(SPACE.s6);
 
         container(body)
             .width(Fill)
@@ -67,10 +79,22 @@ fn tab(palette: Palette, screen: Screen, active: Screen) -> Element<'static, Mes
 
     let label = text(screen.label())
         .size(TYPE.sm)
-        .font(if is_active { font_medium() } else { font_regular() })
-        .color(if is_active { palette.text() } else { palette.muted() });
+        .font(if is_active {
+            font_medium()
+        } else {
+            font_regular()
+        })
+        .color(if is_active {
+            palette.text()
+        } else {
+            palette.muted()
+        });
 
-    let underline = if is_active { strip(palette.accent(), 2.0) } else { strip(Color::TRANSPARENT, 2.0) };
+    let underline = if is_active {
+        strip(palette.accent(), 2.0)
+    } else {
+        strip(Color::TRANSPARENT, 2.0)
+    };
 
     let content = column![label, underline].spacing(SPACE.s1);
 

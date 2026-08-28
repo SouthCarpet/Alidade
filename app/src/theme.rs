@@ -15,11 +15,13 @@
 //! "defined for a later consumer" shape as `design-tokens`'s own
 //! `schema.rs` dead-code allowance.
 
+use std::time::Duration;
+
 use design_tokens::apps::alidade::{DARK, LIGHT};
-use design_tokens::scale::{RADIUS, SHADOW_RAISE_DARK, SHADOW_RAISE_LIGHT, SPACE};
+use design_tokens::scale::{MOTION, RADIUS, SHADOW_RAISE_DARK, SHADOW_RAISE_LIGHT, SPACE};
 use design_tokens::Theme as TokenTheme;
 
-use iced::widget::{button, container, space};
+use iced::widget::{button, container, space, text_input};
 use iced::{Background, Border, Color, Element, Length, Shadow, Vector};
 
 fn col(c: design_tokens::Rgba) -> Color {
@@ -42,11 +44,17 @@ pub struct Palette {
 
 impl Palette {
     pub fn light() -> Self {
-        Palette { theme: &LIGHT, dark: false }
+        Palette {
+            theme: &LIGHT,
+            dark: false,
+        }
     }
 
     pub fn dark() -> Self {
-        Palette { theme: &DARK, dark: true }
+        Palette {
+            theme: &DARK,
+            dark: true,
+        }
     }
 
     pub fn bg(&self) -> Color {
@@ -73,18 +81,85 @@ impl Palette {
         col(self.theme.accent)
     }
 
+    pub fn danger(&self) -> Color {
+        col(self.theme.danger)
+    }
+
+    pub fn success(&self) -> Color {
+        col(self.theme.success)
+    }
+
+    pub fn border(&self) -> Color {
+        col(self.theme.border)
+    }
+
+    /// UI live-refresh interval from the motion scale. Used for the
+    /// Continuous countdown, never as a measurement cadence.
+    pub fn live_tick() -> Duration {
+        Duration::from_millis(MOTION.live.round().max(1.0) as u64)
+    }
+
+    /// Recessed data well: lightness only, no inset shadow.
+    pub fn well_frame<'a, Message: 'a>(
+        &self,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let border = self.border();
+        let well = self.well();
+        container(content)
+            .padding(SPACE.s3)
+            .width(Length::Fill)
+            .style(move |_| {
+                container::Style::default().background(well).border(Border {
+                    color: border,
+                    width: 1.0,
+                    radius: radius(RADIUS.md),
+                })
+            })
+            .into()
+    }
+
+    pub fn text_input(&self) -> impl Fn(&iced::Theme, text_input::Status) -> text_input::Style {
+        let t = *self.theme;
+        move |_theme, status| {
+            let border_color = match status {
+                text_input::Status::Focused { .. } => col(t.focus),
+                text_input::Status::Disabled => col(t.disabled_fill),
+                text_input::Status::Hovered | text_input::Status::Active => col(t.border),
+            };
+            text_input::Style {
+                background: Background::Color(col(t.surface_raised)),
+                border: Border {
+                    color: border_color,
+                    width: 1.0,
+                    radius: radius(RADIUS.md),
+                },
+                icon: col(t.text_muted),
+                placeholder: col(t.text_muted),
+                value: col(t.text),
+                selection: col(t.accent_soft),
+            }
+        }
+    }
+
     /// "Focus = 2px ring + 2px offset" — one focus geometry everywhere
     /// (`rule_design_language.md` point 3(e)), ported verbatim from the
     /// gallery's `focus_ring`: a bordered container around the content,
     /// background left unset so the surrounding surface shows through the
     /// 2px offset gap.
-    pub fn focus_ring<'a, Message: 'a>(&self, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    pub fn focus_ring<'a, Message: 'a>(
+        &self,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
         let focus = col(self.theme.focus);
         container(content)
             .padding(2.0)
             .style(move |_| {
-                container::Style::default()
-                    .border(Border { color: focus, width: 2.0, radius: radius(RADIUS.md + 2.0) })
+                container::Style::default().border(Border {
+                    color: focus,
+                    width: 2.0,
+                    radius: radius(RADIUS.md + 2.0),
+                })
             })
             .into()
     }
@@ -103,16 +178,27 @@ impl Palette {
         content: impl Into<Element<'a, Message>>,
     ) -> Element<'a, Message> {
         let t = *self.theme;
-        let shadow = if self.dark { SHADOW_RAISE_DARK } else { SHADOW_RAISE_LIGHT };
+        let shadow = if self.dark {
+            SHADOW_RAISE_DARK
+        } else {
+            SHADOW_RAISE_LIGHT
+        };
         let content = content.into();
 
         let inner: Element<'a, Message> = if milled {
-            let strip_color = if self.dark { col(t.milled) } else { col(t.border_top) };
-            let strip: Element<'a, Message> = container(space::horizontal().height(Length::Fixed(2.0)))
-                .width(Length::Fill)
-                .style(move |_| container::Style::default().background(strip_color))
-                .into();
-            iced::widget::column![strip, content].spacing(SPACE.s3).into()
+            let strip_color = if self.dark {
+                col(t.milled)
+            } else {
+                col(t.border_top)
+            };
+            let strip: Element<'a, Message> =
+                container(space::horizontal().height(Length::Fixed(2.0)))
+                    .width(Length::Fill)
+                    .style(move |_| container::Style::default().background(strip_color))
+                    .into();
+            iced::widget::column![strip, content]
+                .spacing(SPACE.s3)
+                .into()
         } else {
             content
         };
@@ -123,7 +209,11 @@ impl Palette {
             .style(move |_| {
                 container::Style::default()
                     .background(col(t.surface_raised))
-                    .border(Border { color: col(t.border), width: 1.0, radius: radius(RADIUS.lg) })
+                    .border(Border {
+                        color: col(t.border),
+                        width: 1.0,
+                        radius: radius(RADIUS.lg),
+                    })
                     .shadow(Shadow {
                         color: col(shadow.color),
                         offset: Vector::new(shadow.x, shadow.y),
@@ -145,7 +235,11 @@ impl Palette {
             button::Style {
                 background: Some(Background::from(background)),
                 text_color,
-                border: Border { color: Color::TRANSPARENT, width: 0.0, radius: radius(RADIUS.md) },
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: radius(RADIUS.md),
+                },
                 shadow: Shadow::default(),
                 snap: true,
             }
@@ -159,12 +253,20 @@ impl Palette {
                 button::Status::Active => (col(t.surface_raised), col(t.border), col(t.text)),
                 button::Status::Hovered => (col(t.surface_hover), col(t.border), col(t.text)),
                 button::Status::Pressed => (col(t.well), col(t.border), col(t.text)),
-                button::Status::Disabled => (col(t.disabled_fill), col(t.disabled_fill), col(t.text_muted)),
+                button::Status::Disabled => (
+                    col(t.disabled_fill),
+                    col(t.disabled_fill),
+                    col(t.text_muted),
+                ),
             };
             button::Style {
                 background: Some(Background::from(background)),
                 text_color,
-                border: Border { color: border_color, width: 1.0, radius: radius(RADIUS.md) },
+                border: Border {
+                    color: border_color,
+                    width: 1.0,
+                    radius: radius(RADIUS.md),
+                },
                 shadow: Shadow::default(),
                 snap: true,
             }
@@ -183,7 +285,11 @@ impl Palette {
             button::Style {
                 background: background.map(Background::from),
                 text_color,
-                border: Border { color: Color::TRANSPARENT, width: 0.0, radius: radius(RADIUS.md) },
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: radius(RADIUS.md),
+                },
                 shadow: Shadow::default(),
                 snap: true,
             }
@@ -202,7 +308,11 @@ impl Palette {
             button::Style {
                 background: Some(Background::from(background)),
                 text_color,
-                border: Border { color: Color::TRANSPARENT, width: 0.0, radius: radius(RADIUS.md) },
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: radius(RADIUS.md),
+                },
                 shadow: Shadow::default(),
                 snap: true,
             }
