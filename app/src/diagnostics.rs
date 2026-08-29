@@ -12,7 +12,7 @@ pub fn summary(rounds: &[RoundRow], range: (SystemTime, SystemTime), app_version
     let mut lines = vec![
         format!("Alidade v{app_version} diagnostics"),
         format!(
-            "Selected range (local time): {} to {}",
+            "Selected range (UTC): {} to {}",
             crate::screens::format_time(from),
             crate::screens::format_time(to)
         ),
