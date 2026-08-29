@@ -29,7 +29,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::{probe_once, stats, EngineError, PingSample, PingStats, Probe, SpeedProvider, Throughput};
+use crate::{
+    probe_once, stats, EngineError, PingSample, PingStats, Probe, SpeedProvider, Throughput,
+};
 
 /// Fewest ping samples inside a load window that can carry an under-load
 /// figure. Below this the number is not a measurement: with one or two

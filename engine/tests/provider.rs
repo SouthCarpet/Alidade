@@ -1,7 +1,8 @@
 use alidade_engine::{
-    CloudflareProvider, EndpointConfig, EngineError, SpeedProvider, MAX_REQUEST_BYTES,
-    UPLOAD_CHUNK_BYTES,
+    BackoffClock, CloudflareProvider, EndpointConfig, EngineError, SpeedProvider,
+    MAX_REQUEST_BYTES, UPLOAD_CHUNK_BYTES,
 };
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use wiremock::{
     matchers::{method, path},
@@ -12,6 +13,29 @@ fn endpoints(server: &MockServer) -> EndpointConfig {
     EndpointConfig {
         download_url: format!("{}/__down", server.uri()),
         upload_url: format!("{}/__up", server.uri()),
+    }
+}
+
+struct TestBackoffClock {
+    now: Mutex<Instant>,
+}
+
+impl TestBackoffClock {
+    fn new(now: Instant) -> Self {
+        Self {
+            now: Mutex::new(now),
+        }
+    }
+
+    fn advance(&self, duration: Duration) {
+        let mut now = self.now.lock().unwrap();
+        *now += duration;
+    }
+}
+
+impl BackoffClock for TestBackoffClock {
+    fn now(&self) -> Instant {
+        *self.now.lock().unwrap()
     }
 }
 
@@ -67,9 +91,16 @@ async fn download_is_time_bounded_and_reports_measured_bytes() {
         download_url: format!("{}/__down", server.uri()),
         upload_url: format!("{}/__up", server.uri()),
     });
-    let t = p.download(Duration::from_secs(2), Some(2_000_000)).await.unwrap();
+    let t = p
+        .download(Duration::from_secs(2), Some(2_000_000))
+        .await
+        .unwrap();
     assert!(t.bytes > 0 && t.bytes <= 2_000_000, "bytes {}", t.bytes);
-    assert!(t.duration <= Duration::from_secs(3), "duration {:?}", t.duration);
+    assert!(
+        t.duration <= Duration::from_secs(3),
+        "duration {:?}",
+        t.duration
+    );
     assert!(t.bits_per_sec > 0.0);
 }
 
@@ -85,7 +116,10 @@ async fn upload_posts_a_body_and_measures_it() {
         download_url: format!("{}/__down", server.uri()),
         upload_url: format!("{}/__up", server.uri()),
     });
-    let t = p.upload(Duration::from_secs(2), Some(1_000_000)).await.unwrap();
+    let t = p
+        .upload(Duration::from_secs(2), Some(1_000_000))
+        .await
+        .unwrap();
     assert!(t.bytes > 0 && t.bytes <= 1_000_000);
     assert!(t.bits_per_sec > 0.0);
 }
@@ -102,7 +136,10 @@ async fn a_server_error_is_an_error_not_a_zero_reading() {
         download_url: format!("{}/__down", server.uri()),
         upload_url: format!("{}/__up", server.uri()),
     });
-    assert!(p.download(Duration::from_secs(1), Some(1_000_000)).await.is_err());
+    assert!(p
+        .download(Duration::from_secs(1), Some(1_000_000))
+        .await
+        .is_err());
 }
 
 /// Proves the deadline — not the byte cap — is what stops a slow download.
@@ -116,9 +153,9 @@ async fn a_server_error_is_an_error_not_a_zero_reading() {
 async fn download_stops_on_the_clock_not_the_byte_cap() {
     let server = MockServer::start().await;
     let max_bytes: u64 = 64_000_000; // 64 MB — no budget this small can drain it
-    // F4: `LikeCloudflareDown` serves exactly the requested `bytes` (up to
-    // 64 MB here) and enforces the real 403 ceiling, same as every other
-    // `__down` mock in this file.
+                                     // F4: `LikeCloudflareDown` serves exactly the requested `bytes` (up to
+                                     // 64 MB here) and enforces the real 403 ceiling, same as every other
+                                     // `__down` mock in this file.
     Mock::given(method("GET"))
         .and(path("/__down"))
         .respond_with(LikeCloudflareDown)
@@ -135,7 +172,12 @@ async fn download_stops_on_the_clock_not_the_byte_cap() {
     let t = p.download(budget, Some(max_bytes)).await.unwrap();
     let elapsed = call_start.elapsed();
 
-    assert!(elapsed >= budget, "elapsed {:?} < budget {:?}", elapsed, budget);
+    assert!(
+        elapsed >= budget,
+        "elapsed {:?} < budget {:?}",
+        elapsed,
+        budget
+    );
     assert!(
         elapsed < budget + slack,
         "elapsed {:?} >= budget+slack {:?}",
@@ -173,7 +215,12 @@ async fn upload_stops_on_the_clock_not_the_byte_cap() {
     let t = p.upload(budget, Some(max_bytes)).await.unwrap();
     let elapsed = call_start.elapsed();
 
-    assert!(elapsed >= budget, "elapsed {:?} < budget {:?}", elapsed, budget);
+    assert!(
+        elapsed >= budget,
+        "elapsed {:?} < budget {:?}",
+        elapsed,
+        budget
+    );
     assert!(
         elapsed < budget + slack,
         "elapsed {:?} >= budget+slack {:?}",
@@ -480,7 +527,12 @@ async fn retry_after_delay_seconds_are_honoured() {
         .mount(&server)
         .await;
 
-    let provider = CloudflareProvider::with_download_chunk_bytes(endpoints(&server), 64 * 1024);
+    let clock = std::sync::Arc::new(TestBackoffClock::new(Instant::now()));
+    let provider = CloudflareProvider::with_download_chunk_bytes_and_backoff_clock(
+        endpoints(&server),
+        64 * 1024,
+        clock.clone(),
+    );
     let budget = Duration::from_millis(200);
 
     let first = provider.download(budget, None).await.unwrap_err();
@@ -493,7 +545,7 @@ async fn retry_after_delay_seconds_are_honoured() {
     }
     assert_eq!(received_get_count(&server).await, 1);
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    clock.advance(Duration::from_millis(200));
     let _still_waiting = provider.download(budget, None).await.unwrap_err();
     assert_eq!(
         received_get_count(&server).await,
@@ -501,7 +553,7 @@ async fn retry_after_delay_seconds_are_honoured() {
         "must not retry before Retry-After elapses"
     );
 
-    tokio::time::sleep(Duration::from_millis(900)).await;
+    clock.advance(Duration::from_millis(800));
     let after = provider.download(budget, None).await.unwrap_err();
     match &after {
         EngineError::RateLimited(limit) => {
@@ -551,7 +603,11 @@ async fn a_429_after_chunks_were_measured_keeps_the_bytes() {
 
     assert_eq!(measured.bytes, chunk * 2);
     assert!(measured.bits_per_sec > 0.0);
-    assert_eq!(received_get_count(&server).await, 3, "two successes then one 429");
+    assert_eq!(
+        received_get_count(&server).await,
+        3,
+        "two successes then one 429"
+    );
 
     let skipped = provider
         .download(Duration::from_millis(300), Some(8_000_000))

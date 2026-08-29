@@ -80,8 +80,10 @@ pub async fn check(
         return Err(UpdateError::Status(response.status().as_u16()));
     }
 
-    let release: GithubRelease =
-        response.json().await.map_err(|_| UpdateError::MalformedResponse)?;
+    let release: GithubRelease = response
+        .json()
+        .await
+        .map_err(|_| UpdateError::MalformedResponse)?;
 
     let Some(tag) = release.tag_name.filter(|tag| !tag.trim().is_empty()) else {
         // A release with no usable tag can't be compared or linked to.
@@ -108,7 +110,10 @@ type Core = (u64, u64, u64);
 /// dot-separated non-negative integers — that is the one "malformed"
 /// signal both callers below rely on.
 fn parse_version(input: &str) -> Option<(Core, bool)> {
-    let input = input.strip_prefix('v').or_else(|| input.strip_prefix('V')).unwrap_or(input);
+    let input = input
+        .strip_prefix('v')
+        .or_else(|| input.strip_prefix('V'))
+        .unwrap_or(input);
     let core_str = match input.split_once('-') {
         Some((core, _prerelease)) => core,
         None => input,

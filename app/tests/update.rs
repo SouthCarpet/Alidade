@@ -62,7 +62,10 @@ fn release_struct_matches_the_documented_shape() {
         notes: "Fixes".to_string(),
     };
     assert_eq!(release.tag, "v1.2.3");
-    assert_eq!(release.url, "https://github.com/SouthCarpet/Alidade/releases/tag/v1.2.3");
+    assert_eq!(
+        release.url,
+        "https://github.com/SouthCarpet/Alidade/releases/tag/v1.2.3"
+    );
     assert_eq!(release.notes, "Fixes");
 }
 

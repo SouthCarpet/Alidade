@@ -18,8 +18,8 @@ pub fn downsample_pings_at(
     now: SystemTime,
     older_than_days: u32,
 ) -> Result<usize, StoreError> {
-    let raw_cutoff = unix_secs(now)?
-        .saturating_sub(i64::from(older_than_days).saturating_mul(86_400));
+    let raw_cutoff =
+        unix_secs(now)?.saturating_sub(i64::from(older_than_days).saturating_mul(86_400));
     // Never split a one-minute bucket across downsample runs: a later
     // upsert for the remainder would otherwise replace the earlier partial
     // aggregate. `unix_secs` is non-negative, but keep pre-epoch values

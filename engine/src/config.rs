@@ -429,7 +429,10 @@ mod tests {
         let (settings, created) = Settings::load_or_create(&path).unwrap();
 
         assert!(created, "the call must report that it wrote the file");
-        assert!(path.exists(), "the settings file must be on disk afterwards");
+        assert!(
+            path.exists(),
+            "the settings file must be on disk afterwards"
+        );
         assert_eq!(
             settings,
             Settings::default(),
@@ -582,7 +585,9 @@ mod tests {
             "invalid TOML literal still emitted:\n{text}"
         );
         assert!(
-            !text.lines().any(|l| l.trim_start().starts_with("daily_budget_bytes")),
+            !text
+                .lines()
+                .any(|l| l.trim_start().starts_with("daily_budget_bytes")),
             "no budget must mean no key:\n{text}"
         );
         assert_eq!(Settings::parse(&text).unwrap(), Settings::default());

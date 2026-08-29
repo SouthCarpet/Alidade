@@ -310,34 +310,23 @@ pub fn parse_app(text: &str) -> Result<AppTokens, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::path::PathBuf;
 
-    /// Step 5 of the task brief: prove the schema gate actually rejects an
-    /// invalid file, without ever touching the real tokens. Copies the real
-    /// base.json into target/tmp-bad/, injects one unknown top-level key,
-    /// and asserts `parse_base` errors (via #[should_panic] on .unwrap()).
+    /// The schema gate must reject an unknown key. The fixture starts from the
+    /// shipped base tokens, but it stays entirely in memory so parallel tests
+    /// cannot race through a shared scratch path.
     #[test]
-    #[should_panic(expected = "unknown field")]
-    fn rejects_unknown_field_in_a_copy_of_base_json() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let real_base = PathBuf::from(manifest_dir).join("../../tokens/base.json");
-        let text = fs::read_to_string(&real_base)
-            .expect("read the real base.json to build the negative-test copy from");
-
-        let mut value: serde_json::Value = serde_json::from_str(&text)
-            .expect("real base.json must itself be valid JSON");
+    fn rejects_an_unknown_field_in_the_shipped_base_tokens() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tokens/base.json"))
+                .expect("real base.json must itself be valid JSON");
         value["totally_unknown_field"] = serde_json::json!("this key is not in the schema");
-        let bad_text = serde_json::to_string_pretty(&value).unwrap();
+        let bad_text = serde_json::to_string(&value).expect("serialize the invalid fixture");
 
-        let bad_dir = PathBuf::from(manifest_dir).join("../../target/tmp-bad");
-        fs::create_dir_all(&bad_dir).expect("create the target/tmp-bad scratch dir");
-        let bad_path = bad_dir.join("base-bad.json");
-        fs::write(&bad_path, &bad_text).expect("write the bad copy");
+        let error = parse_base(&bad_text).expect_err("an unknown top-level token must be rejected");
 
-        let bad_text_read = fs::read_to_string(&bad_path).expect("read back the bad copy");
-        // The real base.json on disk is untouched — only base-bad.json
-        // under target/tmp-bad/ (gitignored) was written.
-        parse_base(&bad_text_read).unwrap();
+        assert!(
+            error.to_string().contains("unknown field"),
+            "the schema error must identify the unknown field: {error}"
+        );
     }
 }

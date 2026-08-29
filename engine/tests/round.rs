@@ -21,7 +21,10 @@ fn cfg(metrics: MetricSelection) -> RoundConfig {
         phase_budget: PHASE_BUDGET,
         byte_ceiling: None,
         ping_interval: PING_INTERVAL,
-        targets: vec![Probe::TcpConnect { host: "127.0.0.1".into(), port: 1 }], // always "lost", fine for shape tests
+        targets: vec![Probe::TcpConnect {
+            host: "127.0.0.1".into(),
+            port: 1,
+        }], // always "lost", fine for shape tests
     }
 }
 
@@ -35,29 +38,62 @@ fn loaded_provider() -> MockProvider {
 #[tokio::test]
 async fn a_full_round_fills_every_slot_and_pings_under_load() {
     let p = loaded_provider();
-    let r = run_round(&p, &cfg(MetricSelection { download: true, upload: true, ping: true })).await;
+    let r = run_round(
+        &p,
+        &cfg(MetricSelection {
+            download: true,
+            upload: true,
+            ping: true,
+        }),
+    )
+    .await;
     assert_eq!(r.kind, RoundKind::Full);
     assert!(r.down.is_some() && r.up.is_some());
     assert!(r.ping_idle.is_some(), "idle ping must run first");
-    assert!(r.ping_down.is_some() && r.ping_up.is_some(), "ping must continue under load");
+    assert!(
+        r.ping_down.is_some() && r.ping_up.is_some(),
+        "ping must continue under load"
+    );
     assert!(r.skipped_reason.is_none());
-    assert!(!r.capped, "no byte ceiling was set, so nothing could cap it");
+    assert!(
+        !r.capped,
+        "no byte ceiling was set, so nothing could cap it"
+    );
 }
 
 #[tokio::test]
 async fn ping_only_round_does_no_throughput() {
     let p = loaded_provider();
-    let r = run_round(&p, &cfg(MetricSelection { download: false, upload: false, ping: true })).await;
+    let r = run_round(
+        &p,
+        &cfg(MetricSelection {
+            download: false,
+            upload: false,
+            ping: true,
+        }),
+    )
+    .await;
     assert_eq!(r.kind, RoundKind::PingOnly, "no throughput was asked for");
     assert!(r.down.is_none() && r.up.is_none() && r.ping_down.is_none() && r.ping_up.is_none());
-    assert!(r.down_load.is_none() && r.up_load.is_none(), "no phase ran, so there is no load window");
+    assert!(
+        r.down_load.is_none() && r.up_load.is_none(),
+        "no phase ran, so there is no load window"
+    );
     assert!(r.ping_idle.is_some());
 }
 
 #[tokio::test]
 async fn download_only_round_keeps_upload_empty() {
     let p = MockProvider::with_delay(50_000_000.0, LOAD);
-    let r = run_round(&p, &cfg(MetricSelection { download: true, upload: false, ping: true })).await;
+    let r = run_round(
+        &p,
+        &cfg(MetricSelection {
+            download: true,
+            upload: false,
+            ping: true,
+        }),
+    )
+    .await;
     assert_eq!(r.kind, RoundKind::Full);
     assert!(r.down.is_some() && r.up.is_none() && r.ping_down.is_some() && r.ping_up.is_none());
 }
@@ -65,7 +101,15 @@ async fn download_only_round_keeps_upload_empty() {
 #[tokio::test]
 async fn a_provider_error_does_not_kill_the_round() {
     let p = MockProvider::failing();
-    let r = run_round(&p, &cfg(MetricSelection { download: true, upload: true, ping: true })).await;
+    let r = run_round(
+        &p,
+        &cfg(MetricSelection {
+            download: true,
+            upload: true,
+            ping: true,
+        }),
+    )
+    .await;
     assert!(r.down.is_none() && r.up.is_none());
     assert_eq!(
         r.kind,
@@ -73,7 +117,11 @@ async fn a_provider_error_does_not_kill_the_round() {
         "throughput was attempted and failed; that is a full round with a skip reason, not a ping round"
     );
     assert!(r.ping_idle.is_some(), "ping still ran");
-    assert!(r.skipped_reason.as_deref().unwrap_or("").contains("provider"));
+    assert!(r
+        .skipped_reason
+        .as_deref()
+        .unwrap_or("")
+        .contains("provider"));
 }
 
 /// `MockProvider::new` resolves instantly, so a `RoundRunner` regression
@@ -94,12 +142,19 @@ async fn ping_stays_concurrent_with_a_slow_provider_not_serialized_after_it() {
     let phase_budget = Duration::from_millis(400);
     let provider_delay = Duration::from_millis(400);
     let round_cfg = RoundConfig {
-        metrics: MetricSelection { download: true, upload: false, ping: true },
+        metrics: MetricSelection {
+            download: true,
+            upload: false,
+            ping: true,
+        },
         idle_ping,
         phase_budget,
         byte_ceiling: None,
         ping_interval: Duration::from_millis(40),
-        targets: vec![Probe::TcpConnect { host: "127.0.0.1".into(), port: 1 }], // always "lost", fast to probe
+        targets: vec![Probe::TcpConnect {
+            host: "127.0.0.1".into(),
+            port: 1,
+        }], // always "lost", fast to probe
     };
     let p = MockProvider::with_delay(100_000_000.0, provider_delay);
 
@@ -108,7 +163,10 @@ async fn ping_stays_concurrent_with_a_slow_provider_not_serialized_after_it() {
     let elapsed = start.elapsed();
 
     assert!(r.down.is_some(), "download must still have completed");
-    assert!(r.ping_idle.is_some() && r.ping_down.is_some(), "ping must still have run");
+    assert!(
+        r.ping_idle.is_some() && r.ping_down.is_some(),
+        "ping must still have run"
+    );
 
     // Sanity floor: this must not somehow finish faster than the two
     // sequential phases (idle, then download-with-ping) could possibly
@@ -136,7 +194,11 @@ async fn ping_stays_concurrent_with_a_slow_provider_not_serialized_after_it() {
 async fn ping_requested_with_no_targets_configured_is_a_skip_not_a_panic() {
     let p = MockProvider::new(100_000_000.0);
     let round_cfg = RoundConfig {
-        metrics: MetricSelection { download: false, upload: false, ping: true },
+        metrics: MetricSelection {
+            download: false,
+            upload: false,
+            ping: true,
+        },
         idle_ping: Duration::from_millis(20),
         phase_budget: Duration::from_millis(20),
         byte_ceiling: None,
@@ -179,14 +241,21 @@ async fn ping_requested_with_no_targets_configured_is_a_skip_not_a_panic() {
 async fn the_ping_under_load_window_ends_with_the_load_not_with_the_budget() {
     let load = Duration::from_millis(200);
     let round_cfg = RoundConfig {
-        metrics: MetricSelection { download: true, upload: false, ping: true },
+        metrics: MetricSelection {
+            download: true,
+            upload: false,
+            ping: true,
+        },
         idle_ping: Duration::from_millis(20),
         // Ten times the load: a loop bound by the budget runs ten times as
         // long as the transfer it claims to be measuring.
         phase_budget: Duration::from_millis(2000),
         byte_ceiling: None,
         ping_interval: Duration::from_millis(20),
-        targets: vec![Probe::TcpConnect { host: "127.0.0.1".into(), port: 1 }],
+        targets: vec![Probe::TcpConnect {
+            host: "127.0.0.1".into(),
+            port: 1,
+        }],
     };
     let p = MockProvider::with_delay(100_000_000.0, load);
 
@@ -194,7 +263,9 @@ async fn the_ping_under_load_window_ends_with_the_load_not_with_the_budget() {
     let r = run_round(&p, &round_cfg).await;
     let elapsed = start.elapsed();
 
-    let window = r.down_load.expect("a download phase ran, so it has a load window");
+    let window = r
+        .down_load
+        .expect("a download phase ran, so it has a load window");
 
     // THE mechanism assertion: the samples must fit the load window they are
     // labelled with. The loop takes at most one sample per `ping_interval`
@@ -232,7 +303,10 @@ async fn the_ping_under_load_window_ends_with_the_load_not_with_the_budget() {
         "recorded load duration {:?} is not the {load:?} the transfer actually took",
         window.duration
     );
-    assert!(r.ping_down.is_some(), "a full series must still produce a figure");
+    assert!(
+        r.ping_down.is_some(),
+        "a full series must still produce a figure"
+    );
 }
 
 /// **F2 honesty rule, mutation-checked.** Fewer than `MIN_UNDER_LOAD_SAMPLES`
@@ -249,18 +323,27 @@ async fn the_ping_under_load_window_ends_with_the_load_not_with_the_budget() {
 #[tokio::test]
 async fn too_few_samples_under_load_report_no_number_at_all() {
     let round_cfg = RoundConfig {
-        metrics: MetricSelection { download: true, upload: false, ping: true },
+        metrics: MetricSelection {
+            download: true,
+            upload: false,
+            ping: true,
+        },
         idle_ping: Duration::from_millis(20),
         phase_budget: Duration::from_millis(500),
         byte_ceiling: None,
         ping_interval: Duration::from_millis(20),
-        targets: vec![Probe::TcpConnect { host: "127.0.0.1".into(), port: 1 }],
+        targets: vec![Probe::TcpConnect {
+            host: "127.0.0.1".into(),
+            port: 1,
+        }],
     };
     let p = MockProvider::new(100_000_000.0); // no delay: no load at all
 
     let r = run_round(&p, &round_cfg).await;
 
-    let window = r.down_load.expect("the phase ran, so its window was recorded");
+    let window = r
+        .down_load
+        .expect("the phase ran, so its window was recorded");
     assert!(
         window.ping_samples < MIN_UNDER_LOAD_SAMPLES,
         "this test needs a window under the threshold; it held {} samples",
@@ -289,7 +372,11 @@ async fn too_few_samples_under_load_report_no_number_at_all() {
 async fn with_no_byte_ceiling_the_clock_alone_ends_the_phase() {
     let round_cfg = RoundConfig {
         byte_ceiling: None,
-        ..cfg(MetricSelection { download: true, upload: false, ping: true })
+        ..cfg(MetricSelection {
+            download: true,
+            upload: false,
+            ping: true,
+        })
     };
     let p = MockProvider::with_delay(500_000_000.0, LOAD);
 
@@ -316,7 +403,11 @@ async fn a_data_budget_ceiling_caps_the_round_and_says_so() {
     let ceiling = 1_000_000;
     let round_cfg = RoundConfig {
         byte_ceiling: Some(ceiling),
-        ..cfg(MetricSelection { download: true, upload: true, ping: true })
+        ..cfg(MetricSelection {
+            download: true,
+            upload: true,
+            ping: true,
+        })
     };
     let p = MockProvider::with_delay(500_000_000.0, LOAD); // far more than the ceiling allows
 
@@ -379,7 +470,11 @@ async fn a_download_partial_after_a_later_429_does_not_present_a_plain_speed_num
     // A generous budget, like production's 10 s phase: the one chunk that
     // gets through is a small fraction of it, same as the soak.
     let round_cfg = RoundConfig {
-        metrics: MetricSelection { download: true, upload: false, ping: false },
+        metrics: MetricSelection {
+            download: true,
+            upload: false,
+            ping: false,
+        },
         idle_ping: Duration::from_millis(1),
         phase_budget: Duration::from_secs(2),
         byte_ceiling: None,
@@ -393,7 +488,9 @@ async fn a_download_partial_after_a_later_429_does_not_present_a_plain_speed_num
         r.down, None,
         "r.down must not be a plain speed number after one chunk and a 429"
     );
-    let window = r.down_load.expect("the phase ran, so its window was recorded");
+    let window = r
+        .down_load
+        .expect("the phase ran, so its window was recorded");
     assert_eq!(
         window.bytes, chunk,
         "the bytes that really crossed the wire must not be lost along with the discarded rate"

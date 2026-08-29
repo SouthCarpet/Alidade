@@ -105,7 +105,10 @@ fn a_missed_interval_after_sleep_runs_once_not_a_burst() {
     // Both cadences are overdue after a three-hour sleep — three throughput
     // slots and thirty-five ping slots were missed. That is one round.
     assert!(sched.next_due(now) <= now, "due immediately");
-    assert!(sched.next_full_due(now) <= now, "the throughput cadence is overdue too");
+    assert!(
+        sched.next_full_due(now) <= now,
+        "the throughput cadence is overdue too"
+    );
     assert_eq!(sched.pending_rounds(now), 1, "no catch-up burst");
     assert_eq!(
         sched.kind_due(now),

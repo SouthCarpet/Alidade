@@ -2,7 +2,11 @@ use alidade_engine::{LoadWindow, PingSample, PingStats, RoundKind, RoundResult, 
 use alidade_store::Store;
 use std::time::{Duration, SystemTime};
 
-fn round_with(down: Option<Throughput>, up: Option<Throughput>, ping_idle: Option<PingStats>) -> RoundResult {
+fn round_with(
+    down: Option<Throughput>,
+    up: Option<Throughput>,
+    ping_idle: Option<PingStats>,
+) -> RoundResult {
     RoundResult {
         started_at: SystemTime::now(),
         kind: if down.is_some() || up.is_some() {
@@ -197,9 +201,18 @@ fn a_target_that_answers_nothing_is_stored_as_loss_never_as_a_zero_ping() {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open(&dir.path().join("a.db")).unwrap();
     let all_lost = alidade_engine::stats(&[
-        PingSample { at: SystemTime::now(), rtt: None },
-        PingSample { at: SystemTime::now(), rtt: None },
-        PingSample { at: SystemTime::now(), rtt: None },
+        PingSample {
+            at: SystemTime::now(),
+            rtt: None,
+        },
+        PingSample {
+            at: SystemTime::now(),
+            rtt: None,
+        },
+        PingSample {
+            at: SystemTime::now(),
+            rtt: None,
+        },
     ]);
 
     s.insert_round(&round_with(None, None, Some(all_lost)))
@@ -505,7 +518,14 @@ fn the_csv_says_which_kind_of_round_each_row_is_and_whether_it_was_capped() {
     assert!(rows[1].capped);
     assert_eq!(rows[2].mode, RoundKind::PingOnly);
     assert!(!rows[2].capped);
-    assert_eq!(rows[3].mode, RoundKind::Full, "throughput was attempted, not skipped as a metric");
-    assert!(!rows[3].capped, "a rate limit, not the byte ceiling, ended this phase");
+    assert_eq!(
+        rows[3].mode,
+        RoundKind::Full,
+        "throughput was attempted, not skipped as a metric"
+    );
+    assert!(
+        !rows[3].capped,
+        "a rate limit, not the byte ceiling, ended this phase"
+    );
     assert_eq!(rows[3].down_bps, None);
 }

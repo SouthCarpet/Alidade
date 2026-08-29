@@ -38,7 +38,8 @@ use color::oklch_to_srgb;
 use schema::{parse_app, parse_base, AppTokens, BaseTokens, ColorSpec, Dataviz, ShadowSpec};
 
 fn main() {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("cargo always sets CARGO_MANIFEST_DIR");
+    let manifest_dir =
+        env::var("CARGO_MANIFEST_DIR").expect("cargo always sets CARGO_MANIFEST_DIR");
     let out_dir = env::var("OUT_DIR").expect("cargo always sets OUT_DIR");
     let tokens_dir = Path::new(&manifest_dir).join("../../tokens");
     let base_path = tokens_dir.join("base.json");
@@ -56,7 +57,12 @@ fn main() {
     });
 
     let mut app_files: Vec<PathBuf> = fs::read_dir(&apps_dir)
-        .unwrap_or_else(|e| panic!("design-tokens schema gate: cannot list {}: {e}", apps_dir.display()))
+        .unwrap_or_else(|e| {
+            panic!(
+                "design-tokens schema gate: cannot list {}: {e}",
+                apps_dir.display()
+            )
+        })
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
@@ -72,7 +78,12 @@ fn main() {
         let kebab = path
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or_else(|| panic!("design-tokens schema gate: unreadable file stem for {}", path.display()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "design-tokens schema gate: unreadable file stem for {}",
+                    path.display()
+                )
+            })
             .to_string();
         let module_name = kebab.replace('-', "_");
 
@@ -84,7 +95,8 @@ fn main() {
             )
         });
 
-        let series_hues = derive_series_hues(&kebab, app.accent_hue, &base.dataviz, &app.series_order);
+        let series_hues =
+            derive_series_hues(&kebab, app.accent_hue, &base.dataviz, &app.series_order);
         let light = ThemeValues::build("light", &base, &app, &series_hues);
         let dark = ThemeValues::build("dark", &base, &app, &series_hues);
 
@@ -98,7 +110,10 @@ fn main() {
         );
 
         let stylesheet = render_stylesheet(&light, &dark, &base);
-        let _ = write!(css_arms, "        {kebab:?} => Some({stylesheet:?}.to_string()),\n");
+        let _ = write!(
+            css_arms,
+            "        {kebab:?} => Some({stylesheet:?}.to_string()),\n"
+        );
     }
 
     fs::write(Path::new(&out_dir).join("apps_mod.rs"), apps_mod_src).expect("write apps_mod.rs");
@@ -111,8 +126,12 @@ fn main() {
 }
 
 fn read_or_panic(path: &Path) -> String {
-    fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("design-tokens schema gate: cannot read {}: {e}", path.display()))
+    fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "design-tokens schema gate: cannot read {}: {e}",
+            path.display()
+        )
+    })
 }
 
 /// Series 1 = app accent hue; slots 2-6 = the first `anchor_slots` entries
@@ -124,10 +143,17 @@ fn read_or_panic(path: &Path) -> String {
 /// ruling B3 refined) — see [`fill_short_series_order`]. Either path is
 /// asserted to land on exactly 6 entries: that's the fixed `[f64; 6]` the
 /// crate's public contract promises.
-fn derive_series_hues(kebab: &str, accent_hue: f64, dv: &Dataviz, series_order: &Option<Vec<f64>>) -> [f64; 6] {
+fn derive_series_hues(
+    kebab: &str,
+    accent_hue: f64,
+    dv: &Dataviz,
+    series_order: &Option<Vec<f64>>,
+) -> [f64; 6] {
     let hues: Vec<f64> = match series_order {
         Some(explicit) if explicit.len() >= 6 => explicit[..6].to_vec(),
-        Some(explicit) if !explicit.is_empty() => fill_short_series_order(explicit, accent_hue, dv, kebab),
+        Some(explicit) if !explicit.is_empty() => {
+            fill_short_series_order(explicit, accent_hue, dv, kebab)
+        }
         _ => {
             assert_eq!(
                 1 + dv.anchor_slots,
@@ -182,7 +208,12 @@ fn default_series_tail(accent_hue: f64, dv: &Dataviz) -> Vec<f64> {
 /// if it also collides, reaching 6 non-colliding series hues is
 /// impossible with this app's tokens and the build panics with the exact
 /// reason instead of guessing or duplicating.
-fn fill_short_series_order(explicit: &[f64], accent_hue: f64, dv: &Dataviz, kebab: &str) -> Vec<f64> {
+fn fill_short_series_order(
+    explicit: &[f64],
+    accent_hue: f64,
+    dv: &Dataviz,
+    kebab: &str,
+) -> Vec<f64> {
     let mut used: Vec<f64> = explicit.to_vec();
     used.push(accent_hue); // harmless if already present; only feeds the distance check below
     let needed = 6 - explicit.len();
@@ -193,7 +224,9 @@ fn fill_short_series_order(explicit: &[f64], accent_hue: f64, dv: &Dataviz, keba
         if accepted >= needed {
             break;
         }
-        let collides = used.iter().any(|&h| circular_diff(h, anchor) <= dv.accent_exclusion_deg);
+        let collides = used
+            .iter()
+            .any(|&h| circular_diff(h, anchor) <= dv.accent_exclusion_deg);
         if !collides {
             used.push(anchor);
             result.push(anchor);
@@ -201,7 +234,9 @@ fn fill_short_series_order(explicit: &[f64], accent_hue: f64, dv: &Dataviz, keba
         }
     }
     while accepted < needed {
-        let collides = used.iter().any(|&h| circular_diff(h, dv.spare_hue) <= dv.accent_exclusion_deg);
+        let collides = used
+            .iter()
+            .any(|&h| circular_diff(h, dv.spare_hue) <= dv.accent_exclusion_deg);
         if collides {
             panic!(
                 "design-tokens schema gate: {kebab}: series_order has {given} hue(s) but needs 6 — every remaining anchor_hues entry and spare_hue ({spare}) collides (within {deg} degrees) with a hue already in the series {used:?}; add more series_order entries, or widen anchor_hues/spare_hue in base.json",
@@ -276,7 +311,12 @@ impl Cv {
 
     fn css(&self) -> String {
         if (self.a - 1.0).abs() < 1e-9 {
-            format!("oklch({} {} {})", fmt_num(self.l), fmt_num(self.c), fmt_num(self.h))
+            format!(
+                "oklch({} {} {})",
+                fmt_num(self.l),
+                fmt_num(self.c),
+                fmt_num(self.h)
+            )
         } else {
             format!(
                 "oklch({} {} {} / {})",
@@ -327,9 +367,21 @@ struct ThemeValues {
 
 impl ThemeValues {
     fn build(mode: &str, base: &BaseTokens, app: &AppTokens, series_hues: &[f64; 6]) -> Self {
-        let neutrals = if mode == "light" { &base.neutrals.light } else { &base.neutrals.dark };
-        let af = if mode == "light" { &base.accent_family.light } else { &base.accent_family.dark };
-        let status = if mode == "light" { &base.status.light } else { &base.status.dark };
+        let neutrals = if mode == "light" {
+            &base.neutrals.light
+        } else {
+            &base.neutrals.dark
+        };
+        let af = if mode == "light" {
+            &base.accent_family.light
+        } else {
+            &base.accent_family.dark
+        };
+        let status = if mode == "light" {
+            &base.status.light
+        } else {
+            &base.status.dark
+        };
         let series_color = if mode == "light" {
             &base.dataviz.series_color.light
         } else {
@@ -355,11 +407,22 @@ impl ThemeValues {
         let accent_l = af.accent.l;
         let accent_c = af.accent.c;
         let accent = Cv::new(accent_l, accent_c, accent_hue, 1.0);
-        let accent_hover = Cv::new(accent_l + af.hover.l_delta, accent_c + af.hover.c_delta, accent_hue, 1.0);
-        let accent_active = Cv::new(accent_l + af.active.l_delta, accent_c + af.active.c_delta, accent_hue, 1.0);
+        let accent_hover = Cv::new(
+            accent_l + af.hover.l_delta,
+            accent_c + af.hover.c_delta,
+            accent_hue,
+            1.0,
+        );
+        let accent_active = Cv::new(
+            accent_l + af.active.l_delta,
+            accent_c + af.active.c_delta,
+            accent_hue,
+            1.0,
+        );
         let soft_c = af.soft.c_max.min(accent_c * af.soft.c_factor);
         let accent_soft = Cv::new(af.soft.l, soft_c, accent_hue, 1.0);
-        let accent_soft_active = Cv::new(af.soft.l, soft_c + af.soft_active.c_delta, accent_hue, 1.0);
+        let accent_soft_active =
+            Cv::new(af.soft.l, soft_c + af.soft_active.c_delta, accent_hue, 1.0);
         let softfg_c = accent_c * af.soft_foreground.c_factor;
         let accent_soft_foreground = Cv::new(af.soft_foreground.l, softfg_c, accent_hue, 1.0);
         let focus_c = af.focus.c.unwrap_or(accent_c);
@@ -499,7 +562,11 @@ fn render_stylesheet(light: &ThemeValues, dark: &ThemeValues, base: &BaseTokens)
     let _ = write!(root, "  --radius-md: {}px;\n", fmt_num(rad.md));
     let _ = write!(root, "  --radius-lg: {}px;\n", fmt_num(rad.lg));
     let _ = write!(root, "  --radius-pill: {}px;\n", fmt_num(rad.pill));
-    let _ = write!(root, "  --shadow-raise: {};\n", shadow_css(&base.shadow.raise.light));
+    let _ = write!(
+        root,
+        "  --shadow-raise: {};\n",
+        shadow_css(&base.shadow.raise.light)
+    );
     let m = &base.motion;
     let _ = write!(root, "  --motion-fast: {}ms;\n", fmt_num(m.fast));
     let _ = write!(root, "  --motion-base: {}ms;\n", fmt_num(m.base));
@@ -510,7 +577,11 @@ fn render_stylesheet(light: &ThemeValues, dark: &ThemeValues, base: &BaseTokens)
 
     let mut dark_block = String::new();
     push_color_lines(&mut dark_block, dark);
-    let _ = write!(dark_block, "  --shadow-raise: {};\n", shadow_css(&base.shadow.raise.dark));
+    let _ = write!(
+        dark_block,
+        "  --shadow-raise: {};\n",
+        shadow_css(&base.shadow.raise.dark)
+    );
 
     format!(":root {{\n{root}}}\n[data-theme=\"dark\"] {{\n{dark_block}}}\n")
 }
@@ -541,7 +612,11 @@ fn len_px(x: f64) -> String {
 fn push_color_lines(out: &mut String, t: &ThemeValues) {
     let _ = write!(out, "  --color-background: {};\n", t.background.css());
     let _ = write!(out, "  --color-well: {};\n", t.well.css());
-    let _ = write!(out, "  --color-surface-raised: {};\n", t.surface_raised.css());
+    let _ = write!(
+        out,
+        "  --color-surface-raised: {};\n",
+        t.surface_raised.css()
+    );
     let _ = write!(out, "  --color-surface-hover: {};\n", t.surface_hover.css());
     let _ = write!(out, "  --color-border: {};\n", t.border.css());
     let _ = write!(out, "  --color-border-top: {};\n", t.border_top.css());
@@ -554,8 +629,16 @@ fn push_color_lines(out: &mut String, t: &ThemeValues) {
     let _ = write!(out, "  --color-accent-hover: {};\n", t.accent_hover.css());
     let _ = write!(out, "  --color-accent-active: {};\n", t.accent_active.css());
     let _ = write!(out, "  --color-accent-soft: {};\n", t.accent_soft.css());
-    let _ = write!(out, "  --color-accent-soft-active: {};\n", t.accent_soft_active.css());
-    let _ = write!(out, "  --color-accent-soft-foreground: {};\n", t.accent_soft_foreground.css());
+    let _ = write!(
+        out,
+        "  --color-accent-soft-active: {};\n",
+        t.accent_soft_active.css()
+    );
+    let _ = write!(
+        out,
+        "  --color-accent-soft-foreground: {};\n",
+        t.accent_soft_foreground.css()
+    );
     let _ = write!(out, "  --color-focus: {};\n", t.focus.css());
     let _ = write!(out, "  --color-on-accent: {};\n", t.on_accent.css());
     let _ = write!(out, "  --color-danger: {};\n", t.danger.css());
@@ -569,7 +652,11 @@ fn push_color_lines(out: &mut String, t: &ThemeValues) {
     for (i, c) in t.chart.iter().enumerate() {
         let _ = write!(out, "  --color-chart-{}: {};\n", i + 1, c.css());
     }
-    let _ = write!(out, "  --color-chart-band-alpha: {};\n", fmt_num(t.chart_band_alpha));
+    let _ = write!(
+        out,
+        "  --color-chart-band-alpha: {};\n",
+        fmt_num(t.chart_band_alpha)
+    );
     let _ = write!(out, "  --color-chart-grid: {};\n", t.chart_grid.css());
 }
 
@@ -616,7 +703,11 @@ fn render_scale(base: &BaseTokens) -> String {
         "pub static MOTION: Motion = Motion {{ fast: {:?}f32, base: {:?}f32, draw: {:?}f32, live: {:?}f32, ease_standard: {:?} }};\n",
         m.fast as f32, m.base as f32, m.draw as f32, m.live as f32, m.ease_standard
     );
-    let _ = write!(out, "pub const CONTROL_H: f32 = {:?}f32;\n", base.misc.control_h as f32);
+    let _ = write!(
+        out,
+        "pub const CONTROL_H: f32 = {:?}f32;\n",
+        base.misc.control_h as f32
+    );
     let _ = write!(
         out,
         "pub static SHADOW_RAISE_LIGHT: ShadowRaise = ShadowRaise {{ x: {:?}f32, y: {:?}f32, blur: {:?}f32, color: {} }};\n",

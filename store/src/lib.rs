@@ -171,9 +171,8 @@ impl Store {
     pub fn insert_ping_samples(&self, target: &str, s: &[PingSample]) -> Result<usize, StoreError> {
         let tx = self.conn.unchecked_transaction()?;
         {
-            let mut stmt = tx.prepare(
-                "INSERT INTO ping_samples (target, at, rtt_ms) VALUES (?1, ?2, ?3)",
-            )?;
+            let mut stmt =
+                tx.prepare("INSERT INTO ping_samples (target, at, rtt_ms) VALUES (?1, ?2, ?3)")?;
             for sample in s {
                 let at = unix_secs(sample.at)?;
                 let rtt_ms = sample.rtt.map(|d| d.as_secs_f64() * 1000.0);
@@ -221,8 +220,9 @@ impl Store {
     ) -> Result<Aggregates, StoreError> {
         let from_secs = unix_secs(from)?;
         let to_secs = unix_secs(to)?;
-        self.conn.query_row(
-            "SELECT
+        self.conn
+            .query_row(
+                "SELECT
                  AVG(down_bps), MIN(down_bps), MAX(down_bps),
                  AVG(up_bps), MIN(up_bps), MAX(up_bps),
                  AVG(ping_idle_ms), MIN(ping_idle_ms), MAX(ping_idle_ms),
@@ -232,20 +232,20 @@ impl Store {
                  AVG(loss_pct), MIN(loss_pct), MAX(loss_pct)
              FROM rounds
              WHERE started_at >= ?1 AND started_at <= ?2",
-            params![from_secs, to_secs],
-            |row| {
-                Ok(Aggregates {
-                    down_bps: metric_agg(row, 0)?,
-                    up_bps: metric_agg(row, 3)?,
-                    ping_idle_ms: metric_agg(row, 6)?,
-                    ping_down_ms: metric_agg(row, 9)?,
-                    ping_up_ms: metric_agg(row, 12)?,
-                    jitter_ms: metric_agg(row, 15)?,
-                    loss_pct: metric_agg(row, 18)?,
-                })
-            },
-        )
-        .map_err(StoreError::from)
+                params![from_secs, to_secs],
+                |row| {
+                    Ok(Aggregates {
+                        down_bps: metric_agg(row, 0)?,
+                        up_bps: metric_agg(row, 3)?,
+                        ping_idle_ms: metric_agg(row, 6)?,
+                        ping_down_ms: metric_agg(row, 9)?,
+                        ping_up_ms: metric_agg(row, 12)?,
+                        jitter_ms: metric_agg(row, 15)?,
+                        loss_pct: metric_agg(row, 18)?,
+                    })
+                },
+            )
+            .map_err(StoreError::from)
     }
 
     /// Collapse raw ping samples older than `older_than_days` into
@@ -381,11 +381,7 @@ fn metric_agg(row: &Row<'_>, start: usize) -> rusqlite::Result<MetricAgg> {
 fn row_to_round(row: &Row<'_>) -> rusqlite::Result<RoundRow> {
     let started_at_secs: i64 = row.get(1)?;
     let started_at = from_unix_secs(started_at_secs).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            1,
-            rusqlite::types::Type::Integer,
-            Box::new(e),
-        )
+        rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Integer, Box::new(e))
     })?;
     let mode_text: String = row.get(2)?;
     // An unrecognised mode is corrupt data. Defaulting it to `full` would

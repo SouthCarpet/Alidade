@@ -24,6 +24,21 @@ use futures_core::Stream;
 
 use crate::{EngineError, RateLimit};
 
+/// Monotonic time used exclusively to decide when an HTTP rate-limit hold has
+/// expired. Keeping this small boundary separate from phase timing lets callers
+/// test retry policy without waiting for a real `Retry-After` interval.
+pub trait BackoffClock: Send + Sync {
+    fn now(&self) -> Instant;
+}
+
+struct SystemBackoffClock;
+
+impl BackoffClock for SystemBackoffClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
 /// One measured phase: bytes actually moved, how long the measurement clock
 /// ran, and the derived rate.
 ///
@@ -101,6 +116,7 @@ pub struct CloudflareProvider {
     /// round stops the next round from hammering the same limit. Callers
     /// that construct a fresh provider per round throw this away.
     rate_limit: Mutex<Option<RateLimitHold>>,
+    backoff_clock: Arc<dyn BackoffClock>,
 }
 
 impl CloudflareProvider {
@@ -116,11 +132,27 @@ impl CloudflareProvider {
     /// `chunk_bytes` is clamped below `MAX_REQUEST_BYTES`, so no caller can
     /// reintroduce the 403 by asking for a chunk the server refuses.
     pub fn with_download_chunk_bytes(cfg: EndpointConfig, chunk_bytes: u64) -> Self {
+        Self::with_download_chunk_bytes_and_backoff_clock(
+            cfg,
+            chunk_bytes,
+            Arc::new(SystemBackoffClock),
+        )
+    }
+
+    /// Same as [`Self::with_download_chunk_bytes`], with a clock for the
+    /// rate-limit hold. Production uses [`SystemBackoffClock`]; deterministic
+    /// callers can provide a clock they advance explicitly.
+    pub fn with_download_chunk_bytes_and_backoff_clock(
+        cfg: EndpointConfig,
+        chunk_bytes: u64,
+        backoff_clock: Arc<dyn BackoffClock>,
+    ) -> Self {
         Self {
             client: reqwest::Client::new(),
             cfg,
             download_chunk_bytes: chunk_bytes.clamp(1, MAX_REQUEST_BYTES - 1),
             rate_limit: Mutex::new(None),
+            backoff_clock,
         }
     }
 
@@ -177,7 +209,7 @@ impl CloudflareProvider {
         let Some(hold) = guard.as_ref() else {
             return Ok(());
         };
-        let now = Instant::now();
+        let now = self.backoff_clock.now();
         if now >= hold.not_before {
             return Ok(());
         }
@@ -197,7 +229,7 @@ impl CloudflareProvider {
             .filter(|wait| !wait.is_zero())
             .unwrap_or_else(|| default_backoff(consecutive));
         *guard = Some(RateLimitHold {
-            not_before: Instant::now() + wait,
+            not_before: self.backoff_clock.now() + wait,
             consecutive,
         });
         EngineError::RateLimited(RateLimit {
@@ -582,7 +614,9 @@ impl SpeedProvider for MockProvider {
         max_bytes: Option<u64>,
     ) -> Result<Throughput, EngineError> {
         if self.fail {
-            return Err(EngineError::Other("mock provider configured to fail".to_string()));
+            return Err(EngineError::Other(
+                "mock provider configured to fail".to_string(),
+            ));
         }
         if !self.delay.is_zero() {
             tokio::time::sleep(self.delay).await;
@@ -596,7 +630,9 @@ impl SpeedProvider for MockProvider {
         max_bytes: Option<u64>,
     ) -> Result<Throughput, EngineError> {
         if self.fail {
-            return Err(EngineError::Other("mock provider configured to fail".to_string()));
+            return Err(EngineError::Other(
+                "mock provider configured to fail".to_string(),
+            ));
         }
         if !self.delay.is_zero() {
             tokio::time::sleep(self.delay).await;

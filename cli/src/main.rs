@@ -4,11 +4,12 @@ use std::error::Error;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use alidade_engine::{
-    probe_once, run_round, CloudflareProvider, LoadWindow, MetricSelection, PingSample,
-    PingStats, Probe, RoundKind, RoundPlan, RoundResult, Scheduler, Settings, TargetSpec,
+    probe_once, run_round, CloudflareProvider, LoadWindow, MetricSelection, PingSample, PingStats,
+    Probe, RoundKind, RoundPlan, RoundResult, Scheduler, Settings, TargetSpec,
 };
 use alidade_store::Store;
 use chrono::{NaiveDate, TimeZone, Utc};
@@ -153,7 +154,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Command::PingMonitor { target, seconds } => {
             let store = open_store()?;
-            ping_monitor(&settings, &target, seconds, PING_INTERVAL, &store, boxed_probe_once).await;
+            ping_monitor(
+                &settings,
+                &target,
+                seconds,
+                PING_INTERVAL,
+                &store,
+                Arc::new(boxed_probe_once),
+                Arc::new(boxed_sleep),
+            )
+            .await;
         }
         Command::Export { from, to, out } => export(&from, &to, &out)?,
         Command::ProbeTargets => probe_targets(&settings).await,
@@ -251,7 +261,11 @@ async fn continuous(
         let plan = scheduler.plan_next_round(started);
         scheduler.record_round_start(started, plan.kind);
         let metrics = intersect_metrics(plan.metrics, metrics_for(&settings, &metric_args));
-        let result = run_round(&provider, &round_config(&settings, metrics, plan.byte_ceiling)).await;
+        let result = run_round(
+            &provider,
+            &round_config(&settings, metrics, plan.byte_ceiling),
+        )
+        .await;
         let result = apply_plan(result, &plan);
         // Bytes actually moved, not `result.down`/`result.up` (a rate F1
         // discarded as too short to trust is still bytes that crossed the
@@ -266,7 +280,11 @@ async fn continuous(
         // ping samples do not also go to `insert_ping_samples`.
         store.insert_round(&result)?;
         print_round(&result);
-        if started.duration_since(last_retention).unwrap_or(Duration::ZERO) >= RETENTION_INTERVAL {
+        if started
+            .duration_since(last_retention)
+            .unwrap_or(Duration::ZERO)
+            >= RETENTION_INTERVAL
+        {
             if let Err(err) = store.downsample_pings(settings.raw_ping_retention_days) {
                 eprintln!("retention: {err}");
             }
@@ -300,14 +318,20 @@ fn apply_plan(mut result: RoundResult, plan: &RoundPlan) -> RoundResult {
 }
 
 /// A prober callable, boxed the same way `boxed_probe_once` boxes the real
-/// one. A plain fn pointer (not a capturing closure) so `run_ping_monitor`
-/// can hand it to a spawned task without extra bounds, and so a test can
-/// swap in a fake with no network in it — the same seam
+/// one. It accepts a capturing closure so a test can give each probe a shared
+/// deterministic signal, while production still uses `boxed_probe_once`.
+/// This is the same seam
 /// `icmp_rtt_bounded`'s injected resolver uses in `probe.rs`.
-type ProbeFn = fn(Probe, Duration) -> Pin<Box<dyn Future<Output = PingSample> + Send>>;
+type ProbeFuture = Pin<Box<dyn Future<Output = PingSample> + Send>>;
+type ProbeFn = Arc<dyn Fn(Probe, Duration) -> ProbeFuture + Send + Sync>;
+type WaitFn = Arc<dyn Fn(Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
-fn boxed_probe_once(probe: Probe, timeout: Duration) -> Pin<Box<dyn Future<Output = PingSample> + Send>> {
+fn boxed_probe_once(probe: Probe, timeout: Duration) -> ProbeFuture {
     Box::pin(async move { probe_once(&probe, timeout).await })
+}
+
+fn boxed_sleep(duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(tokio::time::sleep(duration))
 }
 
 /// Which targets `ping-monitor` should watch: the named subset, resolved
@@ -331,7 +355,9 @@ fn resolve_ping_targets<'a>(
                 .find(|t| {
                     t.enabled
                         && (t.name.eq_ignore_ascii_case(name)
-                            || t.name.to_ascii_lowercase().contains(&name.to_ascii_lowercase()))
+                            || t.name
+                                .to_ascii_lowercase()
+                                .contains(&name.to_ascii_lowercase()))
                 })
                 .ok_or_else(|| format!("unknown configured target: {name}"))
         })
@@ -349,6 +375,7 @@ async fn ping_monitor(
     interval: Duration,
     store: &Store,
     prober: ProbeFn,
+    waiter: WaitFn,
 ) {
     let targets = match resolve_ping_targets(settings, wanted) {
         Ok(targets) => targets,
@@ -361,7 +388,7 @@ async fn ping_monitor(
         eprintln!("no enabled targets to monitor");
         return;
     }
-    run_ping_monitor(&targets, seconds.max(1), interval, store, prober).await;
+    run_ping_monitor(&targets, seconds.max(1), interval, store, prober, waiter).await;
 }
 
 /// F1/F2 core. Every tick probes every target AT ONCE (`JoinSet`, not a
@@ -380,12 +407,14 @@ async fn run_ping_monitor(
     interval: Duration,
     store: &Store,
     prober: ProbeFn,
+    waiter: WaitFn,
 ) {
     for _ in 0..ticks {
         let mut set = tokio::task::JoinSet::new();
         for target in targets {
             let name = target.name.clone();
             let probe = target.probe.clone();
+            let prober = prober.clone();
             set.spawn(async move { (name, prober(probe, interval).await) });
         }
         while let Some(joined) = set.join_next().await {
@@ -400,7 +429,7 @@ async fn run_ping_monitor(
                 eprintln!("failed to store ping sample for {name}: {err}");
             }
         }
-        tokio::time::sleep(interval).await;
+        waiter(interval).await;
     }
 }
 
@@ -705,16 +734,30 @@ mod tests {
         for argv in [
             vec!["alidade", "single"],
             vec!["alidade", "continuous", "--throughput-every", "1h"],
-            vec!["alidade", "export", "--from", "2026-08-01", "--to", "2026-08-20", "--out", "r.csv"],
+            vec![
+                "alidade",
+                "export",
+                "--from",
+                "2026-08-01",
+                "--to",
+                "2026-08-20",
+                "--out",
+                "r.csv",
+            ],
             vec!["alidade", "probe-targets"],
         ] {
-            assert!(Cli::try_parse_from(&argv).is_ok(), "{argv:?} must still parse");
+            assert!(
+                Cli::try_parse_from(&argv).is_ok(),
+                "{argv:?} must still parse"
+            );
         }
     }
 
     #[test]
     fn a_cadence_under_a_minute_is_refused_on_either_flag() {
-        assert!(Cli::try_parse_from(["alidade", "continuous", "--throughput-every", "30s"]).is_err());
+        assert!(
+            Cli::try_parse_from(["alidade", "continuous", "--throughput-every", "30s"]).is_err()
+        );
         assert!(Cli::try_parse_from(["alidade", "continuous", "--ping-every", "30s"]).is_err());
         assert!(Cli::try_parse_from(["alidade", "continuous", "--ping-every", "10"]).is_err());
     }
@@ -724,9 +767,15 @@ mod tests {
     /// round along with it.
     #[test]
     fn continuous_takes_both_cadences_independently() {
-        let parsed =
-            Cli::try_parse_from(["alidade", "continuous", "--throughput-every", "2h", "--ping-every", "60s"])
-                .unwrap();
+        let parsed = Cli::try_parse_from([
+            "alidade",
+            "continuous",
+            "--throughput-every",
+            "2h",
+            "--ping-every",
+            "60s",
+        ])
+        .unwrap();
         match parsed.command {
             Command::Continuous {
                 throughput_every,
@@ -800,7 +849,11 @@ mod tests {
         let result = ping_only_result();
         let plan = RoundPlan {
             kind: RoundKind::Full,
-            metrics: MetricSelection { download: false, upload: false, ping: true },
+            metrics: MetricSelection {
+                download: false,
+                upload: false,
+                ping: true,
+            },
             byte_ceiling: Some(0),
             skip_reason: Some("daily budget exhausted".to_string()),
         };
@@ -812,7 +865,10 @@ mod tests {
             RoundKind::Full,
             "the round was planned as full; a budget skip must not read as an ordinary ping round"
         );
-        assert_eq!(applied.skipped_reason.as_deref(), Some("daily budget exhausted"));
+        assert_eq!(
+            applied.skipped_reason.as_deref(),
+            Some("daily budget exhausted")
+        );
     }
 
     /// `apply_plan` must not overwrite a skip reason `run_round` already set
@@ -825,7 +881,11 @@ mod tests {
         result.skipped_reason = Some("download: provider: server returned status 503".to_string());
         let plan = RoundPlan {
             kind: RoundKind::PingOnly,
-            metrics: MetricSelection { download: false, upload: false, ping: true },
+            metrics: MetricSelection {
+                download: false,
+                upload: false,
+                ping: true,
+            },
             byte_ceiling: None,
             skip_reason: None,
         };
@@ -879,8 +939,8 @@ mod tests {
     #[test]
     fn to_covers_the_whole_named_day_not_just_its_first_instant() {
         let to = parse_day_end("2026-08-20").unwrap();
-        let last_round_of_that_day = parse_day_start("2026-08-20").unwrap()
-            + Duration::from_secs(23 * 3600 + 59 * 60 + 30);
+        let last_round_of_that_day =
+            parse_day_start("2026-08-20").unwrap() + Duration::from_secs(23 * 3600 + 59 * 60 + 30);
         let first_round_of_the_next_day = parse_day_start("2026-08-21").unwrap();
 
         assert!(
@@ -904,7 +964,9 @@ mod tests {
     fn test_target(name: &str, host: &str) -> TargetSpec {
         TargetSpec {
             name: name.to_string(),
-            probe: Probe::Icmp { host: host.to_string() },
+            probe: Probe::Icmp {
+                host: host.to_string(),
+            },
             verified: true,
             enabled: true,
         }
@@ -915,7 +977,7 @@ mod tests {
     /// network in a unit test is explicitly out per the task brief.
     const DEAD_HOST: &str = "dead.invalid";
 
-    fn fake_prober(probe: Probe, _timeout: Duration) -> Pin<Box<dyn Future<Output = PingSample> + Send>> {
+    fn fake_prober(probe: Probe, _timeout: Duration) -> ProbeFuture {
         Box::pin(async move {
             let host = match &probe {
                 Probe::Icmp { host } | Probe::TcpConnect { host, .. } => host.clone(),
@@ -925,8 +987,15 @@ mod tests {
             } else {
                 Some(Duration::from_millis(20))
             };
-            PingSample { at: SystemTime::now(), rtt }
+            PingSample {
+                at: SystemTime::UNIX_EPOCH,
+                rtt,
+            }
         })
+    }
+
+    fn ready_waiter(_duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(std::future::ready(()))
     }
 
     /// The finding this task exists to fix, reproduced as a test that would
@@ -955,7 +1024,16 @@ mod tests {
             ..Settings::default()
         };
 
-        ping_monitor(&settings, &[], 3, Duration::from_millis(5), &store, fake_prober).await;
+        ping_monitor(
+            &settings,
+            &[],
+            3,
+            Duration::from_millis(5),
+            &store,
+            Arc::new(fake_prober),
+            Arc::new(ready_waiter),
+        )
+        .await;
 
         assert_eq!(
             store.ping_sample_count().unwrap(),
@@ -972,11 +1050,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("a.db")).unwrap();
         let settings = Settings {
-            targets: vec![test_target("Alpha", "1.2.3.4"), test_target("Beta", "5.6.7.8")],
+            targets: vec![
+                test_target("Alpha", "1.2.3.4"),
+                test_target("Beta", "5.6.7.8"),
+            ],
             ..Settings::default()
         };
 
-        ping_monitor(&settings, &[], 2, Duration::from_millis(5), &store, fake_prober).await;
+        ping_monitor(
+            &settings,
+            &[],
+            2,
+            Duration::from_millis(5),
+            &store,
+            Arc::new(fake_prober),
+            Arc::new(ready_waiter),
+        )
+        .await;
 
         assert_eq!(store.ping_sample_rtts_for("Alpha").unwrap().len(), 2);
         assert_eq!(store.ping_sample_rtts_for("Beta").unwrap().len(), 2);
@@ -999,10 +1089,23 @@ mod tests {
             ..Settings::default()
         };
 
-        ping_monitor(&settings, &[], 2, Duration::from_millis(5), &store, fake_prober).await;
+        ping_monitor(
+            &settings,
+            &[],
+            2,
+            Duration::from_millis(5),
+            &store,
+            Arc::new(fake_prober),
+            Arc::new(ready_waiter),
+        )
+        .await;
 
         let rtts = store.ping_sample_rtts_for("Dead").unwrap();
-        assert_eq!(rtts.len(), 2, "the miss must still be a row, not an omission");
+        assert_eq!(
+            rtts.len(),
+            2,
+            "the miss must still be a row, not an omission"
+        );
         assert!(
             rtts.iter().all(Option::is_none),
             "a miss must be a recorded loss (NULL), not skipped: {rtts:?}"
@@ -1013,26 +1116,14 @@ mod tests {
         );
     }
 
-    /// A prober where every target sleeps out its full timeout before
-    /// reporting loss — the deterministic stand-in for the confirmed-dead
-    /// LoL EUNE preset (`104.160.142.3:443`) the brief names.
-    fn slow_prober(_probe: Probe, timeout: Duration) -> Pin<Box<dyn Future<Output = PingSample> + Send>> {
-        Box::pin(async move {
-            tokio::time::sleep(timeout).await;
-            PingSample { at: SystemTime::now(), rtt: None }
-        })
-    }
-
-    /// F2: targets are probed AT ONCE, not one after another. Four targets
-    /// that each take a full `interval` to time out would cost `>= 4 *
-    /// interval` probed sequentially before the tick's own trailing sleep
-    /// even starts; probed concurrently (`run_ping_monitor`'s `JoinSet`)
-    /// the tick costs about one `interval` regardless of target count.
+    /// F2: targets are probed AT ONCE, not one after another. Each fake waits
+    /// at a four-party barrier. Reaching it proves all probes launched before
+    /// any result was awaited, without a wall-clock delay.
     #[tokio::test]
     async fn every_target_is_probed_concurrently_so_a_dead_one_does_not_delay_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("a.db")).unwrap();
-        let interval = Duration::from_millis(60);
+        let interval = Duration::from_secs(1);
         let settings = Settings {
             targets: (0..4)
                 .map(|i| test_target(&format!("Dead{i}"), DEAD_HOST))
@@ -1040,16 +1131,39 @@ mod tests {
             ..Settings::default()
         };
 
-        let start = std::time::Instant::now();
-        ping_monitor(&settings, &[], 1, interval, &store, slow_prober).await;
-        let elapsed = start.elapsed();
+        let barrier = Arc::new(tokio::sync::Barrier::new(4));
+        let concurrent_prober: ProbeFn = Arc::new(move |_probe, _timeout| {
+            let barrier = barrier.clone();
+            Box::pin(async move {
+                barrier.wait().await;
+                PingSample {
+                    at: SystemTime::UNIX_EPOCH,
+                    rtt: None,
+                }
+            })
+        });
+        let completed = tokio::time::timeout(
+            Duration::from_secs(1),
+            ping_monitor(
+                &settings,
+                &[],
+                1,
+                interval,
+                &store,
+                concurrent_prober,
+                Arc::new(ready_waiter),
+            ),
+        )
+        .await;
 
         assert!(
-            elapsed < interval * 3,
-            "elapsed {elapsed:?} for 4 targets each bounded by {interval:?} suggests \
-             sequential probing, not concurrent (sequential would cost >= 4 * interval \
-             for the probes alone, before the tick's own trailing sleep)"
+            completed.is_ok(),
+            "all four probes must launch before any is awaited; the independent watchdog cancels a sequential regression"
         );
-        assert_eq!(store.ping_sample_count().unwrap(), 4, "still one row per target");
+        assert_eq!(
+            store.ping_sample_count().unwrap(),
+            4,
+            "still one row per target"
+        );
     }
 }

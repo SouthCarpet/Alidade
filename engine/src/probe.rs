@@ -151,7 +151,10 @@ pub fn stats(samples: &[PingSample]) -> PingStats {
 /// simulates a slow or hanging DNS lookup (see `icmp_rtt_bounded` below);
 /// production always calls this with `dns_lookup_ipv4`, the real platform
 /// resolver.
-fn resolve_ipv4_with(host: &str, resolve: impl FnOnce(&str) -> Option<Ipv4Addr>) -> Option<Ipv4Addr> {
+fn resolve_ipv4_with(
+    host: &str,
+    resolve: impl FnOnce(&str) -> Option<Ipv4Addr>,
+) -> Option<Ipv4Addr> {
     if let Ok(ip) = host.parse::<Ipv4Addr>() {
         return Some(ip);
     }
@@ -310,36 +313,54 @@ mod tests {
     /// `tests/probe.rs` uses `.invalid`, whose local resolution fails in
     /// ~30 ms — it can't tell a `tokio::time::timeout` wrapper from no
     /// wrapper at all. This test closes that gap directly: it injects a
-    /// resolver that sleeps well past `timeout` before returning, so it can
-    /// only pass if something actually bounds the wait. Mutation-checked:
+    /// resolver that waits for an explicit release signal, so it can only pass
+    /// if something actually bounds the wait. A separate watchdog keeps the
+    /// test bounded even when the production timeout is removed.
     /// removing the `tokio::time::timeout(...)` around `spawn_blocking` in
-    /// `icmp_rtt_bounded` makes this call block for the full 2 s hang and
-    /// fails the upper-bound assertion (see task-4b-report.md).
+    /// `icmp_rtt_bounded` leaves this future waiting for the release signal.
     #[cfg(windows)]
     #[tokio::test]
     async fn icmp_rtt_is_bounded_by_timeout_even_when_dns_resolution_hangs() {
-        let timeout = Duration::from_millis(200);
-        let hang = Duration::from_secs(2);
+        let timeout = Duration::from_millis(50);
+        let watchdog = timeout + Duration::from_millis(250);
+        let (release, wait) = std::sync::mpsc::channel();
+        let (started, resolver_started) = tokio::sync::oneshot::channel();
 
-        let start = Instant::now();
-        let rtt = icmp_rtt_bounded("host-does-not-matter.example", timeout, move |_host| {
-            std::thread::sleep(hang);
-            None
-        })
-        .await;
-        let elapsed = start.elapsed();
+        let mut probe = tokio::spawn(icmp_rtt_bounded(
+            "host-does-not-matter.example",
+            timeout,
+            move |_host| {
+                let _ = started.send(());
+                let _ = wait.recv();
+                None
+            },
+        ));
+        resolver_started
+            .await
+            .expect("the injected resolver must start");
+        tokio::task::yield_now().await;
+        let pending_before_timeout = !probe.is_finished();
+        let bounded = tokio::time::timeout(watchdog, &mut probe).await;
+        let finished_before_watchdog = bounded.is_ok();
+
+        release
+            .send(())
+            .expect("release the blocked resolver after either outcome");
+        let rtt = match bounded {
+            Ok(result) => result.expect("the bounded probe task must not panic"),
+            Err(_) => probe
+                .await
+                .expect("the probe must cleanly finish after resolver release"),
+        };
 
         assert!(
-            rtt.is_none(),
-            "a resolver that never returns in time must be a loss"
+            pending_before_timeout,
+            "the probe returned before its timeout while the resolver was still blocked"
         );
         assert!(
-            elapsed >= timeout,
-            "elapsed {elapsed:?} was suspiciously faster than the timeout {timeout:?}"
+            finished_before_watchdog,
+            "the production timeout did not finish the probe before the independent watchdog"
         );
-        assert!(
-            elapsed < timeout + Duration::from_millis(500),
-            "elapsed {elapsed:?} was not bounded by timeout {timeout:?} — was the timeout wrapper removed?"
-        );
+        assert!(rtt.is_none(), "a timed-out resolver must be a loss");
     }
 }
