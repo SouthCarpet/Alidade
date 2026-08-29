@@ -64,13 +64,12 @@ fn actions(palette: Palette, app: &App) -> Element<'_, Message> {
         .style(palette.btn_primary())
         .on_press_maybe((!app.round_running).then_some(Message::RunSingleTest));
 
-    // Continuous scheduling is Task 4/6's scope (it needs the engine
-    // `Scheduler`, not wired into `App` yet); this button takes the user to
-    // that screen rather than faking a mode that does not run anything.
+    // Task 4 wired the scheduler: `Message::Resume` starts continuous
+    // measurement and selects the Continuous screen, so the label is true.
     let continuous_button = button(text("Start continuous").size(TYPE.sm).font(font_medium()))
         .padding([SPACE.s2, SPACE.s4])
         .style(palette.btn_secondary())
-        .on_press(Message::ScreenSelected(Screen::Continuous));
+        .on_press(Message::Resume);
 
     let mut bar = row![run_button, continuous_button].spacing(SPACE.s3).align_y(Center);
     if app.round_running {
