@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Copy diagnostics now labels its summary range as UTC, matching the CSV export, and four status strings no longer use em dashes.
+
 ## [0.1.0] - 2026-08-20
 
 ### Added
