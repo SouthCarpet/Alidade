@@ -16,6 +16,7 @@ pub mod continuous;
 pub mod history;
 pub mod home;
 pub mod ping_monitor;
+pub mod settings;
 
 pub(crate) const TABLE_VISIBLE_ROWS: usize = 8;
 
@@ -105,7 +106,16 @@ pub(crate) fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-pub(crate) fn countdown_label(remaining: Duration, running: bool) -> String {
+/// C5 (Task 4 verification): the render cadence is `MOTION.live` (1200 ms),
+/// not 1000 ms, so a caller that tracked "seconds remaining" by counting
+/// ticks would sometimes advance by two seconds in one tick and sometimes by
+/// none — a real drift, not just a display quirk. Taking `now` and the
+/// absolute `deadline` and subtracting fresh on every call means each label
+/// is always exactly `deadline - now` at the moment it is drawn: a slow or
+/// skipped tick changes how often the label updates, never what number it
+/// shows.
+pub(crate) fn countdown_label(now: SystemTime, deadline: SystemTime, running: bool) -> String {
+    let remaining = deadline.duration_since(now).unwrap_or(Duration::ZERO);
     let secs = remaining.as_secs();
     let mm = secs / 60;
     let ss = secs % 60;
@@ -316,8 +326,48 @@ mod tests {
 
     #[test]
     fn countdown_uses_the_plan_copy_when_running() {
-        let label = countdown_label(Duration::from_secs(125), true);
+        let now = UNIX_EPOCH;
+        let deadline = now + Duration::from_secs(125);
+        let label = countdown_label(now, deadline, true);
         assert_eq!(label, "Measuring · next round in 02:05");
+    }
+
+    /// C5: derived fresh from the deadline on every call, so an irregular
+    /// 1200 ms tick cadence (including a delayed one, modelled by the last
+    /// offset) never produces a number larger than the true remaining time,
+    /// and the label always matches an independent `deadline - now`
+    /// computation exactly.
+    #[test]
+    fn countdown_derives_from_the_deadline_so_a_skipped_tick_never_shows_a_wrong_number() {
+        let deadline = UNIX_EPOCH + Duration::from_secs(600);
+        let offsets_ms = [0u64, 1200, 2400, 3600, 4900, 6300];
+        let mut previous_secs = u64::MAX;
+        for offset_ms in offsets_ms {
+            let now = UNIX_EPOCH + Duration::from_millis(offset_ms);
+            let label = countdown_label(now, deadline, true);
+            let expected_secs = deadline.duration_since(now).unwrap().as_secs();
+            assert_eq!(
+                label,
+                format!(
+                    "Measuring · next round in {:02}:{:02}",
+                    expected_secs / 60,
+                    expected_secs % 60
+                )
+            );
+            assert!(
+                expected_secs <= previous_secs,
+                "must never show a number larger than the true remaining time"
+            );
+            previous_secs = expected_secs;
+        }
+    }
+
+    #[test]
+    fn countdown_never_goes_negative_past_the_deadline() {
+        let deadline = UNIX_EPOCH + Duration::from_secs(10);
+        let now = UNIX_EPOCH + Duration::from_secs(20);
+        let label = countdown_label(now, deadline, true);
+        assert_eq!(label, "Measuring · next round in 00:00");
     }
 
     fn stub_row(started_at: SystemTime) -> RoundRow {

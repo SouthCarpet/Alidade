@@ -14,7 +14,7 @@ use iced::{Border, Center, Color, Element, Fill, Length};
 
 use alidade_engine::{LoadWindow, PingStats, RoundResult, Throughput};
 
-use crate::state::{App, Message, Screen};
+use crate::state::{App, Message};
 use crate::theme::Palette;
 use crate::ui::{font_medium, font_numeric, font_regular};
 

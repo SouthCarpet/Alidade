@@ -68,6 +68,17 @@ impl Scheduler {
         Self::new(settings)
     }
 
+    /// Swap in newly saved settings without resetting the schedule anchors
+    /// or today's budget usage. A Settings screen edit (a new cadence, a new
+    /// metric selection, a changed budget) must reach the next round, but it
+    /// must not act like the scheduler just started: replacing the whole
+    /// `Scheduler` would reset `last_full_start`/`last_ping_start` to `None`,
+    /// which reads as "never run" and fires an immediate round on an
+    /// unrelated settings save.
+    pub fn update_settings(&mut self, settings: Settings) {
+        self.settings = settings;
+    }
+
     /// Wait for scheduled slots until cancelled. Each elapsed slot is recorded once; callers that
     /// execute rounds themselves should use `next_due` and `record_round_start` directly.
     pub async fn run_forever(&mut self, stop: CancellationToken) {

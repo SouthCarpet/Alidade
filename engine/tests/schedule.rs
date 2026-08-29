@@ -202,3 +202,37 @@ fn neither_cadence_bursts_after_a_stall() {
         "twelve missed ping slots and three missed throughput slots become one round each, not a burst: {rounds:?}"
     );
 }
+
+/// UI Task 5, step 4: a Settings screen edit must reach the next round
+/// without acting like the scheduler just started. `update_settings` swaps
+/// the cadence in place; it must not reset `last_full_start`, or an
+/// unrelated settings save (say, toggling autostart) would fire an
+/// immediate extra round.
+#[test]
+fn update_settings_changes_the_cadence_without_resetting_the_anchor() {
+    let mut sched = Scheduler::for_test(Settings::test_default(hours(1), minutes(5)));
+    let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    sched.record_round_start(start, RoundKind::Full);
+
+    // Ten minutes after the last round start, on the old one-hour cadence
+    // nothing is due yet.
+    let check_at = start + minutes(10);
+    assert_eq!(sched.next_full_due(check_at), start + hours(1));
+
+    // The user changes the cadence to thirty minutes.
+    sched.update_settings(Settings::test_default(minutes(30), minutes(5)));
+
+    // Ten minutes after the original round, on the new thirty-minute
+    // cadence, the next round is still twenty minutes away — due at minute
+    // 30 of the ORIGINAL start. `due_from` clamps an overdue slot to "now",
+    // so a reset anchor (`last_full_start` back to `None`, as a fresh
+    // `Scheduler` would have it) reads as "never run" and is due
+    // immediately at `check_at` instead — a different, distinguishable
+    // answer, which is what this test would show if `update_settings` had
+    // reset the schedule instead of only swapping the cadence.
+    assert_eq!(
+        sched.next_full_due(check_at),
+        start + minutes(30),
+        "the anchor is still the original round start, not reset to now"
+    );
+}

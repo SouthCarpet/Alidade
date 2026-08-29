@@ -112,12 +112,8 @@ fn status_text(app: &App) -> String {
         return "Paused".to_string();
     }
     let now = SystemTime::now();
-    let remaining = app
-        .scheduler
-        .next_due(now)
-        .duration_since(now)
-        .unwrap_or(Duration::ZERO);
-    countdown_label(remaining, true)
+    let deadline = app.scheduler.next_due(now);
+    countdown_label(now, deadline, true)
 }
 
 /// Duration each time-range chip covers. Kept next to the chips so a new

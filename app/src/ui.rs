@@ -6,7 +6,7 @@
 
 use design_tokens::scale::{SPACE, TYPE};
 
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, row, text};
 use iced::{Color, Element, Fill, Font, Length};
 
 use crate::state::{App, Message, Screen};
@@ -51,7 +51,7 @@ impl App {
             Screen::Continuous => crate::screens::continuous::view(self),
             Screen::PingMonitor => crate::screens::ping_monitor::view(self),
             Screen::History => crate::screens::history::view(self),
-            Screen::Settings => palette.card(false, Space::new().width(Fill).height(Fill)),
+            Screen::Settings => crate::screens::settings::view(self),
         };
 
         let body = column![tabs, content]

@@ -12,6 +12,9 @@ use alidade_store::RoundRow;
 use iced::Task;
 
 use crate::chart::TimeRange;
+use crate::screens::settings::{
+    self, port_text_for, validate_new_target, NewTargetForm, SettingField, TargetField, UiSettings,
+};
 use crate::theme::Palette;
 
 /// One of the app's five top-level views. The tab strip switches between
@@ -88,7 +91,10 @@ pub enum Message {
     Resume,
     ExportCsv,
     ExportFinished(Result<PathBuf, String>),
-    TargetsRefreshed(Vec<(String, PingSample)>),
+    /// `usize` is the row's index into `App::ping_targets`, not its name —
+    /// two targets sharing a name must not collapse into one row (carry-over
+    /// C4 from the Task 4 verification).
+    TargetsRefreshed(Vec<(usize, String, PingSample)>),
     Tick,
     StartPingMonitor,
     StopPingMonitor,
@@ -97,6 +103,19 @@ pub enum Message {
     ChartLoaded(Result<Vec<RoundRow>, String>),
     HistoryLoaded(Result<Vec<RoundRow>, String>),
     DismissToast,
+    /// Settings screen (plan Task 5). One editable field, rather than one
+    /// message per field.
+    SettingChanged(SettingField),
+    TargetAdded,
+    TargetRemoved(usize),
+    TargetToggled(usize),
+    /// One field of an existing target row, committed straight to
+    /// `Settings::targets[index]`.
+    TargetFieldChanged(usize, TargetField),
+    /// One field of the pending "add a target" form; not persisted until
+    /// `TargetAdded`.
+    NewTargetFieldChanged(TargetField),
+    SettingsSaved(Result<(), String>),
 }
 
 /// The application's only long-lived state (plan 052 UI architecture: "a
@@ -120,11 +139,28 @@ pub struct App {
     pub history_to: String,
     pub history_rows: Vec<RoundRow>,
     pub ping_running: bool,
-    ping_in_flight: bool,
     clock_armed: bool,
     pub ping_targets: Vec<TargetLive>,
     pub toast: Option<Toast>,
     pub load_error: Option<String>,
+    /// UI-only preferences (theme, autostart, notification thresholds) —
+    /// not part of `engine::Settings`, see `screens::settings`'s module doc.
+    pub ui_settings: UiSettings,
+    /// Raw text buffers for the numeric fields on the Settings screen. Kept
+    /// separate from the parsed value so the user can type a transient
+    /// invalid value (an empty field, a stray letter) without it being
+    /// discarded or committed early — the same shape History's `from`/`to`
+    /// buffers already use.
+    pub interval_text: String,
+    pub budget_gb_text: String,
+    pub notify_ping_ms_text: String,
+    pub notify_download_mbit_text: String,
+    pub notify_loss_pct_text: String,
+    /// Port text buffers for existing target rows, aligned by index with
+    /// `settings.targets` (name/host/kind are free-form text with no
+    /// invalid state, so only the numeric port needs a buffer).
+    pub target_port_text: Vec<String>,
+    pub new_target: NewTargetForm,
 }
 
 impl App {
@@ -136,6 +172,18 @@ impl App {
         let scheduler = Scheduler::new(settings.clone());
         let (history_from, history_to) =
             crate::screens::history::default_history_range(SystemTime::now());
+        let ui_settings_path = UiSettings::path_beside(&Settings::default_path());
+        let (ui_settings, ui_settings_error) = UiSettings::load_or_default(&ui_settings_path);
+        let interval_text = (settings.throughput_every.as_secs() / 60).to_string();
+        let budget_gb_text = settings
+            .daily_budget_bytes
+            .map(settings::bytes_to_gb_text)
+            .unwrap_or_else(|| "5.0".to_string());
+        let notify_ping_ms_text = ui_settings.notify_ping_ms.value.to_string();
+        let notify_download_mbit_text = ui_settings.notify_download_mbit.value.to_string();
+        let notify_loss_pct_text = ui_settings.notify_loss_pct.value.to_string();
+        let target_port_text = settings.targets.iter().map(port_text_for).collect();
+        let toast = ui_settings_error.map(|message| Toast { ok: false, message });
         (
             App {
                 screen: Screen::default(),
@@ -152,11 +200,18 @@ impl App {
                 history_to: history_to.clone(),
                 history_rows: Vec::new(),
                 ping_running: false,
-                ping_in_flight: false,
                 clock_armed: false,
                 ping_targets: Vec::new(),
-                toast: None,
+                toast,
                 load_error: None,
+                ui_settings,
+                interval_text,
+                budget_gb_text,
+                notify_ping_ms_text,
+                notify_download_mbit_text,
+                notify_loss_pct_text,
+                target_port_text,
+                new_target: NewTargetForm::default(),
             },
             Task::batch([
                 load_chart_task(),
@@ -227,6 +282,24 @@ impl App {
             }
             Message::DismissToast => {
                 self.toast = None;
+                Task::none()
+            }
+            Message::SettingChanged(field) => self.apply_setting_change(field),
+            Message::TargetAdded => self.add_target(),
+            Message::TargetRemoved(index) => self.remove_target(index),
+            Message::TargetToggled(index) => self.toggle_target(index),
+            Message::TargetFieldChanged(index, field) => self.edit_target(index, field),
+            Message::NewTargetFieldChanged(field) => {
+                self.new_target.apply(field);
+                Task::none()
+            }
+            Message::SettingsSaved(result) => {
+                if let Err(err) = result {
+                    self.toast = Some(Toast {
+                        ok: false,
+                        message: format!("settings not saved: {err}"),
+                    });
+                }
                 Task::none()
             }
         }
@@ -301,10 +374,18 @@ impl App {
         })
     }
 
-    fn reload_history_if_valid(&self) -> Task<Message> {
+    /// C2 (Task 4 verification): an unparseable From/To used to be dropped
+    /// silently. Now the user sees why the table did not refresh.
+    fn reload_history_if_valid(&mut self) -> Task<Message> {
         match crate::screens::history::parse_history_bounds(&self.history_from, &self.history_to) {
             Ok(_) => load_history_task(self.history_from.clone(), self.history_to.clone()),
-            Err(_) => Task::none(),
+            Err(err) => {
+                self.toast = Some(Toast {
+                    ok: false,
+                    message: err,
+                });
+                Task::none()
+            }
         }
     }
 
@@ -340,7 +421,6 @@ impl App {
             return Task::none();
         }
         self.ping_running = true;
-        self.ping_in_flight = true;
         self.ping_targets = enabled_targets(&self.settings)
             .into_iter()
             .map(|target| TargetLive {
@@ -351,7 +431,6 @@ impl App {
             .collect();
         if self.ping_targets.is_empty() {
             self.ping_running = false;
-            self.ping_in_flight = false;
             self.toast = Some(Toast {
                 ok: false,
                 message: "no enabled targets to monitor".to_string(),
@@ -362,23 +441,241 @@ impl App {
         start_ping_cycle(&self.ping_targets)
     }
 
-    fn on_targets_refreshed(&mut self, samples: Vec<(String, PingSample)>) -> Task<Message> {
-        self.ping_in_flight = false;
-        for (name, sample) in samples {
-            if let Some(target) = self
-                .ping_targets
-                .iter_mut()
-                .find(|target| target.name == name)
-            {
+    /// C4 (Task 4 verification): samples used to be matched back to a target
+    /// by name, so two targets sharing a name collapsed into one row. The
+    /// index is stable for the lifetime of one monitor session (the vector is
+    /// only rebuilt in `start_ping_monitor`), so keying by it — rather than
+    /// requiring unique names in `Settings` — fixes the collapse without a
+    /// new validation surface in the targets editor.
+    fn on_targets_refreshed(&mut self, samples: Vec<(usize, String, PingSample)>) -> Task<Message> {
+        for (index, _name, sample) in samples {
+            if let Some(target) = self.ping_targets.get_mut(index) {
                 target.samples.push(sample);
             }
         }
         if self.ping_running {
-            self.ping_in_flight = true;
             start_ping_cycle(&self.ping_targets)
         } else {
             Task::none()
         }
+    }
+
+    // -------------------------------------------------------------
+    // Settings screen (plan Task 5)
+    // -------------------------------------------------------------
+
+    /// Every branch that actually changes `self.settings` also pushes it
+    /// into the running `Scheduler` (Step 4: "the scheduler picks up the new
+    /// interval on the next round without restart") and then persists both
+    /// settings files. A branch that only updates a text buffer without a
+    /// valid parse (an interval still being typed, say) does neither yet.
+    fn apply_setting_change(&mut self, field: SettingField) -> Task<Message> {
+        match field {
+            SettingField::IntervalMinutes(text) => {
+                self.interval_text = text.clone();
+                match settings::parse_interval_minutes(&text) {
+                    Ok(duration) => {
+                        self.settings.throughput_every = duration;
+                        return self.commit_settings();
+                    }
+                    Err(err) => {
+                        self.toast = Some(Toast {
+                            ok: false,
+                            message: err,
+                        })
+                    }
+                }
+            }
+            SettingField::Metric(kind, checked) => {
+                match settings::toggle_metric(self.settings.metrics, kind, checked) {
+                    Some(metrics) => {
+                        self.settings.metrics = metrics;
+                        return self.commit_settings();
+                    }
+                    None => {
+                        self.toast = Some(Toast {
+                            ok: false,
+                            message: "at least one metric must stay selected".to_string(),
+                        });
+                    }
+                }
+            }
+            SettingField::Theme(mode) => {
+                self.ui_settings.theme = mode;
+                return self.persist_ui_settings();
+            }
+            SettingField::Autostart(value) => {
+                self.ui_settings.autostart = value;
+                return self.persist_ui_settings();
+            }
+            SettingField::BudgetEnabled(enabled) => {
+                self.settings.daily_budget_bytes = if enabled {
+                    Some(settings::parse_gb_to_bytes(&self.budget_gb_text).unwrap_or(5_000_000_000))
+                } else {
+                    None
+                };
+                return self.commit_settings();
+            }
+            SettingField::BudgetGb(text) => {
+                self.budget_gb_text = text.clone();
+                match settings::parse_gb_to_bytes(&text) {
+                    Ok(bytes) if self.settings.daily_budget_bytes.is_some() => {
+                        self.settings.daily_budget_bytes = Some(bytes);
+                        return self.commit_settings();
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        self.toast = Some(Toast {
+                            ok: false,
+                            message: err,
+                        })
+                    }
+                }
+            }
+            SettingField::NotifyMaster(value) => {
+                self.ui_settings.notify_master = value;
+                return self.persist_ui_settings();
+            }
+            SettingField::NotifyPingEnabled(value) => {
+                self.ui_settings.notify_ping_ms.enabled = value;
+                return self.persist_ui_settings();
+            }
+            SettingField::NotifyPingMs(text) => {
+                self.notify_ping_ms_text = text.clone();
+                if let Ok(value) = text.trim().parse() {
+                    self.ui_settings.notify_ping_ms.value = value;
+                    return self.persist_ui_settings();
+                }
+            }
+            SettingField::NotifyDownloadEnabled(value) => {
+                self.ui_settings.notify_download_mbit.enabled = value;
+                return self.persist_ui_settings();
+            }
+            SettingField::NotifyDownloadMbit(text) => {
+                self.notify_download_mbit_text = text.clone();
+                if let Ok(value) = text.trim().parse() {
+                    self.ui_settings.notify_download_mbit.value = value;
+                    return self.persist_ui_settings();
+                }
+            }
+            SettingField::NotifyLossEnabled(value) => {
+                self.ui_settings.notify_loss_pct.enabled = value;
+                return self.persist_ui_settings();
+            }
+            SettingField::NotifyLossPct(text) => {
+                self.notify_loss_pct_text = text.clone();
+                if let Ok(value) = text.trim().parse() {
+                    self.ui_settings.notify_loss_pct.value = value;
+                    return self.persist_ui_settings();
+                }
+            }
+        }
+        Task::none()
+    }
+
+    fn add_target(&mut self) -> Task<Message> {
+        match validate_new_target(&self.new_target) {
+            Ok(target) => {
+                self.target_port_text.push(port_text_for(&target));
+                self.settings.targets.push(target);
+                self.new_target = NewTargetForm::default();
+                self.commit_settings()
+            }
+            Err(err) => {
+                self.toast = Some(Toast {
+                    ok: false,
+                    message: err,
+                });
+                Task::none()
+            }
+        }
+    }
+
+    fn remove_target(&mut self, index: usize) -> Task<Message> {
+        if index >= self.settings.targets.len() {
+            return Task::none();
+        }
+        self.settings.targets.remove(index);
+        if index < self.target_port_text.len() {
+            self.target_port_text.remove(index);
+        }
+        self.commit_settings()
+    }
+
+    fn toggle_target(&mut self, index: usize) -> Task<Message> {
+        let Some(target) = self.settings.targets.get_mut(index) else {
+            return Task::none();
+        };
+        target.enabled = !target.enabled;
+        self.commit_settings()
+    }
+
+    fn edit_target(&mut self, index: usize, field: TargetField) -> Task<Message> {
+        if let TargetField::Port(text) = &field {
+            if let Some(buffer) = self.target_port_text.get_mut(index) {
+                *buffer = text.clone();
+            }
+        }
+        let port_text = self
+            .target_port_text
+            .get(index)
+            .cloned()
+            .unwrap_or_default();
+        let Some(target) = self.settings.targets.get_mut(index) else {
+            return Task::none();
+        };
+        match field {
+            TargetField::Name(text) => target.name = text,
+            TargetField::Host(text) => settings::set_probe_host(&mut target.probe, text),
+            TargetField::Kind(kind) => {
+                let host = settings::probe_host(&target.probe).to_string();
+                target.probe = settings::build_probe(kind, host, &port_text);
+            }
+            TargetField::Port(text) => match (text.trim().parse::<u16>(), &mut target.probe) {
+                (Ok(port), Probe::TcpConnect { port: existing, .. }) => *existing = port,
+                (Err(_), _) => {
+                    self.toast = Some(Toast {
+                        ok: false,
+                        message: format!("port must be a number from 1 to 65535, got `{text}`"),
+                    });
+                    return Task::none();
+                }
+                _ => {}
+            },
+        }
+        self.commit_settings()
+    }
+
+    /// Push the changed `self.settings` into the running scheduler (so the
+    /// next round already sees it — Step 4) and persist both settings files.
+    fn commit_settings(&mut self) -> Task<Message> {
+        self.scheduler.update_settings(self.settings.clone());
+        self.persist_settings()
+    }
+
+    fn persist_settings(&self) -> Task<Message> {
+        let settings = self.settings.clone();
+        let ui_settings = self.ui_settings.clone();
+        Task::perform(
+            async move {
+                let settings_path = Settings::default_path();
+                settings
+                    .save(&settings_path)
+                    .map_err(|err| err.to_string())?;
+                ui_settings.save(&UiSettings::path_beside(&settings_path))
+            },
+            Message::SettingsSaved,
+        )
+    }
+
+    /// Same as `persist_settings`, without re-writing the engine's own
+    /// settings file when only a UI-only preference changed.
+    fn persist_ui_settings(&self) -> Task<Message> {
+        let ui_settings = self.ui_settings.clone();
+        Task::perform(
+            async move { ui_settings.save(&UiSettings::path_beside(&Settings::default_path())) },
+            Message::SettingsSaved,
+        )
     }
 }
 
@@ -422,18 +719,19 @@ fn load_history_task(from: String, to: String) -> Task<Message> {
 }
 
 fn start_ping_cycle(targets: &[TargetLive]) -> Task<Message> {
-    let work: Vec<(String, Probe)> = targets
+    let work: Vec<(usize, String, Probe)> = targets
         .iter()
-        .map(|target| (target.name.clone(), target.probe.clone()))
+        .enumerate()
+        .map(|(index, target)| (index, target.name.clone(), target.probe.clone()))
         .collect();
     Task::perform(ping_cycle(work), Message::TargetsRefreshed)
 }
 
-async fn ping_cycle(targets: Vec<(String, Probe)>) -> Vec<(String, PingSample)> {
+async fn ping_cycle(targets: Vec<(usize, String, Probe)>) -> Vec<(usize, String, PingSample)> {
     let started = Instant::now();
     let mut set = tokio::task::JoinSet::new();
-    for (name, probe) in targets {
-        set.spawn(async move { (name, probe_once(&probe, PING_INTERVAL).await) });
+    for (index, name, probe) in targets {
+        set.spawn(async move { (index, name, probe_once(&probe, PING_INTERVAL).await) });
     }
     let mut samples = Vec::new();
     while let Some(joined) = set.join_next().await {
@@ -449,11 +747,13 @@ async fn ping_cycle(targets: Vec<(String, Probe)>) -> Vec<(String, PingSample)> 
     samples
 }
 
-fn persist_ping_samples(samples: &[(String, PingSample)]) {
+/// The store keys ping samples by target name (unaffected by C4: matching
+/// live rows back to their index is an app-side concern, storage is not).
+fn persist_ping_samples(samples: &[(usize, String, PingSample)]) {
     let Ok(store) = open_store() else {
         return;
     };
-    for (name, sample) in samples {
+    for (_, name, sample) in samples {
         let _ = store.insert_ping_samples(name, std::slice::from_ref(sample));
     }
 }
@@ -617,5 +917,115 @@ pub fn target_is_failing(target: &TargetLive) -> bool {
     match target.samples.last() {
         Some(sample) => sample.rtt.is_none(),
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds an `App` entirely in memory (no settings/db files touched),
+    /// for tests that only need to exercise `update`'s synchronous state
+    /// changes, not the async tasks it returns.
+    fn test_app() -> App {
+        let settings = Settings::default();
+        let scheduler = Scheduler::new(settings.clone());
+        let (history_from, history_to) =
+            crate::screens::history::default_history_range(SystemTime::now());
+        App {
+            screen: Screen::default(),
+            settings,
+            settings_error: None,
+            round_running: false,
+            last_round: None,
+            scheduler,
+            continuous_running: false,
+            continuous_paused: false,
+            time_range: TimeRange::default(),
+            chart_rows: Vec::new(),
+            history_from,
+            history_to,
+            history_rows: Vec::new(),
+            ping_running: false,
+            clock_armed: false,
+            ping_targets: Vec::new(),
+            toast: None,
+            load_error: None,
+            ui_settings: UiSettings::default(),
+            interval_text: "60".to_string(),
+            budget_gb_text: "5.0".to_string(),
+            notify_ping_ms_text: "150".to_string(),
+            notify_download_mbit_text: "10".to_string(),
+            notify_loss_pct_text: "5".to_string(),
+            target_port_text: Vec::new(),
+            new_target: NewTargetForm::default(),
+        }
+    }
+
+    fn sample(rtt_ms: u64) -> PingSample {
+        PingSample {
+            at: SystemTime::now(),
+            rtt: Some(Duration::from_millis(rtt_ms)),
+        }
+    }
+
+    /// C2 (Task 4 verification): an unparseable From/To used to be dropped
+    /// silently. Now it sets an error toast.
+    #[test]
+    fn an_invalid_history_range_sets_an_error_toast_instead_of_failing_silently() {
+        let mut app = test_app();
+        let _ = app.update(Message::HistoryFromChanged("not-a-date".to_string()));
+        let toast = app.toast.expect("an invalid range must set a toast");
+        assert!(!toast.ok);
+        assert!(toast.message.contains("not-a-date") || toast.message.contains("YYYY-MM-DD"));
+    }
+
+    #[test]
+    fn a_valid_history_range_does_not_set_an_error_toast() {
+        let mut app = test_app();
+        let _ = app.update(Message::HistoryFromChanged("2026-01-01".to_string()));
+        assert!(app.toast.is_none());
+    }
+
+    /// C4 (Task 4 verification): two targets sharing a name must not
+    /// collapse into one row. Keying by index (rather than name) is the
+    /// fix; this proves it directly against a duplicate-name pair.
+    #[test]
+    fn duplicate_target_names_do_not_collapse_into_one_row() {
+        let mut app = test_app();
+        app.ping_targets = vec![
+            TargetLive {
+                name: "dup".to_string(),
+                probe: Probe::Icmp {
+                    host: "1.1.1.1".to_string(),
+                },
+                samples: Vec::new(),
+            },
+            TargetLive {
+                name: "dup".to_string(),
+                probe: Probe::Icmp {
+                    host: "8.8.8.8".to_string(),
+                },
+                samples: Vec::new(),
+            },
+        ];
+
+        let _ = app.on_targets_refreshed(vec![
+            (0, "dup".to_string(), sample(10)),
+            (1, "dup".to_string(), sample(90)),
+        ]);
+
+        assert_eq!(app.ping_targets[0].samples.len(), 1);
+        assert_eq!(app.ping_targets[1].samples.len(), 1);
+        assert_eq!(
+            app.ping_targets[0].samples[0].rtt,
+            Some(Duration::from_millis(10)),
+            "row 0 must keep its own sample, not row 1's"
+        );
+        assert_eq!(
+            app.ping_targets[1].samples[0].rtt,
+            Some(Duration::from_millis(90)),
+            "row 1 must keep its own sample, not row 0's"
+        );
     }
 }

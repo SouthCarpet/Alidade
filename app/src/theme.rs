@@ -119,19 +119,26 @@ impl Palette {
             .into()
     }
 
+    /// C1 (Task 4 verification): focused text inputs now draw a real 2px
+    /// ring in the focus colour, not a 1px colour swap. This is the closest
+    /// approximation of "2px ring + 2px offset" that iced 0.14.2's `Style`
+    /// API can express for this widget, not the full geometry — see the doc
+    /// comment above [`Palette::focus_ring`] for exactly what is missing and
+    /// why. It does not add a third style: focus is still only ever this one
+    /// border, colour and width driven by `Status`, the same as before.
     pub fn text_input(&self) -> impl Fn(&iced::Theme, text_input::Status) -> text_input::Style {
         let t = *self.theme;
         move |_theme, status| {
-            let border_color = match status {
-                text_input::Status::Focused { .. } => col(t.focus),
-                text_input::Status::Disabled => col(t.disabled_fill),
-                text_input::Status::Hovered | text_input::Status::Active => col(t.border),
+            let (border_color, border_width) = match status {
+                text_input::Status::Focused { .. } => (col(t.focus), 2.0),
+                text_input::Status::Disabled => (col(t.disabled_fill), 1.0),
+                text_input::Status::Hovered | text_input::Status::Active => (col(t.border), 1.0),
             };
             text_input::Style {
                 background: Background::Color(col(t.surface_raised)),
                 border: Border {
                     color: border_color,
-                    width: 1.0,
+                    width: border_width,
                     radius: radius(RADIUS.md),
                 },
                 icon: col(t.text_muted),
@@ -147,6 +154,29 @@ impl Palette {
     /// gallery's `focus_ring`: a bordered container around the content,
     /// background left unset so the surrounding surface shows through the
     /// 2px offset gap.
+    ///
+    /// C1 (Task 4 verification) found this unused and `text_input` focus a
+    /// 1px colour swap. `text_input`'s own style now draws a real 2px ring
+    /// (see `Palette::text_input`), which is the closest this task gets to
+    /// wiring this helper in for real, real OS focus, everywhere. Verified,
+    /// not guessed: wiring THIS container around a widget so it reacts to
+    /// that widget's own live focus would need iced to hand focus state to
+    /// the PARENT, and iced 0.14.2 does not:
+    /// - `text_input::Style` has no `shadow` field (only `background`,
+    ///   `border`, `icon`, `placeholder`, `value`, `selection` —
+    ///   `iced_widget-0.14.2/src/text_input.rs`), so there is no way to draw
+    ///   a second, offset ring from inside the widget's own style either.
+    /// - `button::Status` has no `Focused` variant at all in this version
+    ///   (`Active`/`Hovered`/`Pressed`/`Disabled` only — confirmed by
+    ///   grepping `iced_widget-0.14.2/src/button.rs` for "focus": zero
+    ///   matches). Buttons have no keyboard-focus concept to react to here.
+    ///
+    /// Getting the full geometry on every focusable widget would need
+    /// app-tracked focus (an iced `operation::focusable::find_focused`
+    /// round trip re-issued after each relevant event) — real, but a much
+    /// bigger change than this carry-over's severity warrants; left for a
+    /// follow-up rather than guessed at. This helper stays exactly as it
+    /// was so that follow-up has it ready to use.
     pub fn focus_ring<'a, Message: 'a>(
         &self,
         content: impl Into<Element<'a, Message>>,
