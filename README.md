@@ -2,13 +2,16 @@
 
 Alidade measures a fixed internet link over time and keeps the record. Each full round records download, upload, ping, and ping under load: whether latency gets worse while the link is busy. It stores the results in SQLite and can export CSV evidence for an ISP dispute. `ping-monitor` is a denser mode for watching a game-server or other target's latency.
 
+![Continuous screen](app/docs/screens/continuous-light.png)
+
 ## Features
 
-- Full measurement rounds with download, upload, idle ping, and ping under load.
-- Scheduled full and ping-only rounds, plus a dense ping monitor.
-- Local SQLite history and CSV export.
-- Editable targets and speed-test endpoint URLs in a plain TOML settings file.
-- No telemetry, accounts, API keys, or phone-home. The only outbound traffic is the configured measurement itself. An opt-in update check against GitHub Releases is planned and is not in the current source.
+- Home runs a single test.
+- Continuous shows a chart and a table of rounds.
+- Ping monitor shows target sparklines.
+- History exports CSV and copies diagnostics.
+- Settings edits targets and notification thresholds.
+- The tray supports close-to-tray and toast notifications.
 
 ## Quick start
 

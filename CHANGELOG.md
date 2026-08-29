@@ -15,3 +15,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - SQLite storage, retention/downsampling for ping-monitor samples, and CSV export.
 - CLI commands for one-off measurements, scheduled measurements, ping monitoring, export, and target probing.
 - Desktop UI shell with five screens and tab navigation.
+- Desktop UI with Home, Continuous, Ping monitor, History, and Settings screens.
+- Windows system tray with close-to-tray behaviour.
+- Windows toast notifications for configured threshold breaches.
