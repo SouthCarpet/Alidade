@@ -9,8 +9,10 @@
 //! from the outside.
 
 pub mod chart;
+pub mod notify;
 pub mod screens;
 pub mod state;
 pub mod theme;
+pub mod tray;
 pub mod ui;
 pub mod update;

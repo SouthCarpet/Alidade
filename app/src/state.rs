@@ -9,13 +9,17 @@ use alidade_engine::{
     RoundResult, Scheduler, Settings, TargetSpec,
 };
 use alidade_store::RoundRow;
-use iced::Task;
+use iced::futures::channel::mpsc;
+use iced::futures::StreamExt;
+use iced::{window, Subscription, Task};
 
 use crate::chart::TimeRange;
+use crate::notify::{self, NotifyState};
 use crate::screens::settings::{
     self, port_text_for, validate_new_target, NewTargetForm, SettingField, TargetField, UiSettings,
 };
 use crate::theme::Palette;
+use crate::tray::{self, TrayHandle, TrayMessage};
 
 /// One of the app's five top-level views. The tab strip switches between
 /// them; each screen's content lands in Tasks 2, 4 and 5.
@@ -116,6 +120,14 @@ pub enum Message {
     /// `TargetAdded`.
     NewTargetFieldChanged(TargetField),
     SettingsSaved(Result<(), String>),
+    /// Tray icon click or menu selection (plan Task 6).
+    Tray(TrayMessage),
+    /// The main window's id, fetched once at boot so tray/close handling
+    /// has something to hide or restore.
+    WindowIdReady(Option<window::Id>),
+    /// The OS asked to close the window. `App::update` decides whether that
+    /// means hide-to-tray or a real exit — see `tray::should_hide_on_close`.
+    WindowCloseRequested(window::Id),
 }
 
 /// The application's only long-lived state (plan 052 UI architecture: "a
@@ -161,10 +173,22 @@ pub struct App {
     /// invalid state, so only the numeric port needs a buffer).
     pub target_port_text: Vec<String>,
     pub new_target: NewTargetForm,
+    /// Kept alive for the tray icon's lifetime (plan Task 6); `None` when
+    /// the tray failed to build (non-Windows, or the OS refused it) — see
+    /// `tray::should_hide_on_close`, which turns close-to-tray off then.
+    tray: Option<TrayHandle>,
+    /// The main window's id, learned once at boot. `None` only in the brief
+    /// window before that lookup resolves.
+    window_id: Option<window::Id>,
+    /// `--minimized` (Task 6 Step 2): applied once, the first time
+    /// `window_id` becomes known.
+    start_minimized: bool,
+    /// Threshold-notification cooldown state (Task 6 Step 3).
+    notify_state: NotifyState,
 }
 
 impl App {
-    pub fn boot() -> (App, Task<Message>) {
+    pub fn boot(start_minimized: bool) -> (App, Task<Message>) {
         let (settings, settings_error) = match Settings::load_or_create(&Settings::default_path()) {
             Ok((settings, _created)) => (settings, None),
             Err(err) => (Settings::default(), Some(format!("settings: {err}"))),
@@ -183,7 +207,20 @@ impl App {
         let notify_download_mbit_text = ui_settings.notify_download_mbit.value.to_string();
         let notify_loss_pct_text = ui_settings.notify_loss_pct.value.to_string();
         let target_port_text = settings.targets.iter().map(port_text_for).collect();
-        let toast = ui_settings_error.map(|message| Toast { ok: false, message });
+
+        // Spawned here (App::boot runs on the winit thread before `.run()`
+        // starts pumping it — see tray.rs's module doc) so the tray's
+        // hidden window shares the same message queue the real window uses.
+        let (tray_sender, tray_receiver) = mpsc::unbounded();
+        let (tray, tray_error) = match tray::spawn(tray_sender) {
+            Ok(handle) => (Some(handle), None),
+            Err(err) => (None, Some(err.to_string())),
+        };
+        // A broken settings file is the louder problem when both happen at
+        // once; the tray failing is still surfaced, just not silently.
+        let toast = ui_settings_error
+            .map(|message| Toast { ok: false, message })
+            .or_else(|| tray_error.map(|message| Toast { ok: false, message }));
         (
             App {
                 screen: Screen::default(),
@@ -212,12 +249,26 @@ impl App {
                 notify_loss_pct_text,
                 target_port_text,
                 new_target: NewTargetForm::default(),
+                tray,
+                window_id: None,
+                start_minimized,
+                notify_state: NotifyState::default(),
             },
             Task::batch([
                 load_chart_task(),
                 load_history_task(history_from, history_to),
+                Task::stream(tray_receiver.map(Message::Tray)),
+                window::oldest().map(Message::WindowIdReady),
             ]),
         )
+    }
+
+    /// Window-close and tray-driven events, alongside the existing
+    /// Task-based tick loop (`sleep_then_tick`). `close_requests` has no
+    /// Task equivalent — it must be listened for continuously, not fetched
+    /// once — so this is the app's only `Subscription`.
+    pub fn subscription(&self) -> Subscription<Message> {
+        window::close_requests().map(Message::WindowCloseRequested)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -302,6 +353,51 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Tray(message) => self.on_tray_message(message),
+            Message::WindowIdReady(id) => self.on_window_id_ready(id),
+            Message::WindowCloseRequested(id) => self.on_close_requested(id),
+        }
+    }
+
+    /// Task 6 Step 1/2: the tray menu reuses the same handling as the
+    /// matching in-window action (Pause, Run single test) rather than
+    /// duplicating it, so the two can never drift apart.
+    fn on_tray_message(&mut self, message: TrayMessage) -> Task<Message> {
+        match message {
+            TrayMessage::ShowWindow => self.restore_window(),
+            TrayMessage::RunSingleTest => self.update(Message::RunSingleTest),
+            TrayMessage::PauseContinuous => self.update(Message::Pause),
+            // The only real exit (Task 6 Step 2) — it does not go through
+            // `should_hide_on_close` at all.
+            TrayMessage::Quit => iced::exit(),
+        }
+    }
+
+    fn on_window_id_ready(&mut self, id: Option<window::Id>) -> Task<Message> {
+        self.window_id = id;
+        match (id, self.start_minimized) {
+            (Some(id), true) => {
+                self.start_minimized = false;
+                window::set_mode(id, window::Mode::Hidden)
+            }
+            _ => Task::none(),
+        }
+    }
+
+    fn restore_window(&self) -> Task<Message> {
+        match self.window_id {
+            Some(id) => window::set_mode(id, window::Mode::Windowed),
+            None => Task::none(),
+        }
+    }
+
+    /// Task 6 Step 2: hide to the tray instead of exiting, except when
+    /// there is no tray to hide to (see `tray::should_hide_on_close`).
+    fn on_close_requested(&self, id: window::Id) -> Task<Message> {
+        if tray::should_hide_on_close(self.tray.is_some(), self.continuous_running) {
+            window::set_mode(id, window::Mode::Hidden)
+        } else {
+            window::close(id)
         }
     }
 
@@ -339,8 +435,24 @@ impl App {
             .map_or(0, |window| window.bytes)
             .saturating_add(outcome.result.up_load.map_or(0, |window| window.bytes));
         self.scheduler.record_bytes(SystemTime::now(), bytes);
+        self.notify_thresholds(&outcome.result);
         self.last_round = Some(outcome);
         load_chart_task()
+    }
+
+    /// Task 6 Step 3: every finished round (single test or scheduled) gets a
+    /// chance to breach a threshold. `evaluate` is the pure decision; `show`
+    /// is the one line that actually raises a toast.
+    fn notify_thresholds(&mut self, result: &RoundResult) {
+        for notification in notify::evaluate(
+            &self.ui_settings,
+            result,
+            &mut self.notify_state,
+            Instant::now(),
+            notify::DEFAULT_COOLDOWN,
+        ) {
+            notify::show(&notification);
+        }
     }
 
     fn on_tick(&mut self) -> Task<Message> {
@@ -959,6 +1071,10 @@ mod tests {
             notify_loss_pct_text: "5".to_string(),
             target_port_text: Vec::new(),
             new_target: NewTargetForm::default(),
+            tray: None,
+            window_id: None,
+            start_minimized: false,
+            notify_state: NotifyState::default(),
         }
     }
 
@@ -1027,5 +1143,50 @@ mod tests {
             Some(Duration::from_millis(90)),
             "row 1 must keep its own sample, not row 0's"
         );
+    }
+
+    /// Task 6 Step 1: the tray's "Pause continuous" item must leave the app
+    /// in exactly the state the in-window Pause button does — proven by
+    /// routing both through the same `Message::Pause`, not by duplicating
+    /// the assignment.
+    #[test]
+    fn the_tray_pause_message_pauses_continuous_the_same_way_the_button_does() {
+        let mut app = test_app();
+        app.continuous_running = true;
+        let _ = app.update(Message::Tray(TrayMessage::PauseContinuous));
+        assert!(!app.continuous_running);
+        assert!(app.continuous_paused);
+    }
+
+    /// Task 6 Step 1: the tray's "Run single test" item starts a round the
+    /// same way the Home button does.
+    #[test]
+    fn the_tray_run_single_test_message_starts_a_round() {
+        let mut app = test_app();
+        let _ = app.update(Message::Tray(TrayMessage::RunSingleTest));
+        assert!(app.round_running);
+    }
+
+    /// Task 6 Step 2: with no window id yet (the brief moment before boot's
+    /// lookup resolves), showing the window must not panic.
+    #[test]
+    fn showing_the_window_before_its_id_is_known_does_nothing() {
+        let app = test_app();
+        assert!(app.window_id.is_none());
+        let _ = app.restore_window();
+    }
+
+    /// Task 6 Step 2: `--minimized` hides the window exactly once, the
+    /// first time its id becomes known, and never again on a later
+    /// `WindowIdReady` (there is none in practice, but the flag must not
+    /// stay armed).
+    #[test]
+    fn minimized_start_arms_exactly_once() {
+        let mut app = test_app();
+        app.start_minimized = true;
+        let id = window::Id::unique();
+        let _ = app.on_window_id_ready(Some(id));
+        assert_eq!(app.window_id, Some(id));
+        assert!(!app.start_minimized, "the flag must not stay armed");
     }
 }

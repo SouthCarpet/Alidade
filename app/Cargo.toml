@@ -17,3 +17,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2.0.20"
+
+# Tray icon, close-to-tray, threshold notifications (plan 052, Task 6):
+# Windows-only, same target-gating pattern as the engine's ICMP `windows`
+# dependency, so the app still compiles elsewhere with the feature stubbed.
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.23"    # tray icon + Show/Run/Pause/Quit menu
+notify-rust = "4"     # Windows toast for threshold breaches
