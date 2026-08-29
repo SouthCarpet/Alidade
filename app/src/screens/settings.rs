@@ -494,7 +494,7 @@ fn note<'a>(palette: Palette, text_value: String) -> Element<'a, Message> {
 
 fn interval_row(palette: Palette, app: &App) -> Element<'_, Message> {
     let invalid = parse_interval_minutes(&app.interval_text).is_err();
-    let input = text_input("10", &app.interval_text)
+    let input = text_input("60", &app.interval_text)
         .size(TYPE.sm)
         .padding([SPACE.s2, SPACE.s3])
         .width(Length::Fixed(96.0))
