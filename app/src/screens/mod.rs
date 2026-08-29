@@ -174,6 +174,7 @@ pub(crate) fn toast_view<'a>(palette: Palette, toast: &Toast) -> Element<'a, Mes
         .style(palette.btn_ghost())
         .on_press(Message::DismissToast);
     palette.well_frame(
+        false,
         row![
             dot,
             text(toast.message.clone())
@@ -240,6 +241,7 @@ fn table_header(palette: Palette) -> Element<'static, Message> {
     ]
     .spacing(SPACE.s2)
     .align_y(Alignment::Center)
+    .width(Fill)
     .into()
 }
 
@@ -258,6 +260,7 @@ fn table_row<'a>(palette: Palette, row: &RoundRow) -> Element<'a, Message> {
     ]
     .spacing(SPACE.s2)
     .align_y(Alignment::Center)
+    .width(Fill)
     .into()
 }
 
@@ -278,8 +281,17 @@ pub(crate) fn rounds_table<'a>(palette: Palette, rows: &[RoundRow]) -> Element<'
     }
     let row_h = TYPE.sm + SPACE.s2 * 2.0;
     let height = row_h * ((TABLE_VISIBLE_ROWS + 1) as f32);
+    // F2 (Task 7 fix wave): a default scrollbar floats over the content, so
+    // it covered the rightmost (Loss) column at the table's right edge —
+    // in both History and here (Continuous shares this helper). An
+    // embedded scrollbar reserves its own layout space instead, so the
+    // columns never sit under it.
+    let gutter = scrollable::Scrollbar::new().spacing(SPACE.s2);
     palette.well_frame(
-        scrollable(column(body).spacing(SPACE.s2).width(Fill)).height(Length::Fixed(height)),
+        true,
+        scrollable(column(body).spacing(SPACE.s2).width(Fill))
+            .height(Length::Fixed(height))
+            .direction(scrollable::Direction::Vertical(gutter)),
     )
 }
 

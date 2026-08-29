@@ -18,9 +18,11 @@ use crate::state::{App, Message};
 use crate::theme::Palette;
 use crate::ui::{font_medium, font_numeric, font_regular};
 
-pub fn view(app: &App) -> Element<'_, Message> {
-    let palette = Palette::light();
-
+// Task 7 pre-work A1: `palette` now comes from the caller (`App::palette`,
+// resolved from `UiSettings.theme`) instead of being hardcoded here — the
+// only change this task makes to this file, which another session has
+// in-flight edits in.
+pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
     let mut sections: Vec<Element<'_, Message>> = Vec::new();
 
     if let Some(message) = &app.settings_error {
@@ -71,7 +73,9 @@ fn actions(palette: Palette, app: &App) -> Element<'_, Message> {
         .style(palette.btn_secondary())
         .on_press(Message::Resume);
 
-    let mut bar = row![run_button, continuous_button].spacing(SPACE.s3).align_y(Center);
+    let mut bar = row![run_button, continuous_button]
+        .spacing(SPACE.s3)
+        .align_y(Center);
     if app.round_running {
         bar = bar.push(status_pill(palette, "Measuring"));
     }
@@ -81,16 +85,23 @@ fn actions(palette: Palette, app: &App) -> Element<'_, Message> {
 fn status_pill<'a>(palette: Palette, label: &'static str) -> Element<'a, Message> {
     let background = Color::from(palette.theme.accent_soft);
     let foreground = Color::from(palette.theme.accent_soft_foreground);
-    container(text(label).size(TYPE.xs).font(font_medium()).color(foreground))
-        .padding([SPACE.s1, SPACE.s3])
-        .style(move |_| {
-            container::Style::default().background(background).border(Border {
+    container(
+        text(label)
+            .size(TYPE.xs)
+            .font(font_medium())
+            .color(foreground),
+    )
+    .padding([SPACE.s1, SPACE.s3])
+    .style(move |_| {
+        container::Style::default()
+            .background(background)
+            .border(Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
                 radius: iced::border::radius(RADIUS.pill),
             })
-        })
-        .into()
+    })
+    .into()
 }
 
 /// A recessed well: `well` background + `border`, no inset shadow — the
@@ -104,38 +115,61 @@ fn well<'a>(palette: Palette, content: Element<'a, Message>) -> Element<'a, Mess
         .style(move |_| {
             container::Style::default()
                 .background(palette.well())
-                .border(Border { color: border, width: 1.0, radius: iced::border::radius(RADIUS.md) })
+                .border(Border {
+                    color: border,
+                    width: 1.0,
+                    radius: iced::border::radius(RADIUS.md),
+                })
         })
         .into()
 }
 
 fn banner<'a>(palette: Palette, message: &str) -> Element<'a, Message> {
     let dot_color = Color::from(palette.theme.danger);
-    let dot = container(Space::new().width(Length::Fixed(8.0)).height(Length::Fixed(8.0))).style(move |_| {
-        container::Style::default().background(dot_color).border(Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: iced::border::radius(RADIUS.pill),
-        })
+    let dot = container(
+        Space::new()
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0)),
+    )
+    .style(move |_| {
+        container::Style::default()
+            .background(dot_color)
+            .border(Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: iced::border::radius(RADIUS.pill),
+            })
     });
 
     well(
         palette,
-        row![dot, text(message.to_string()).size(TYPE.sm).color(palette.text())]
-            .spacing(SPACE.s2)
-            .align_y(Center)
-            .into(),
+        row![
+            dot,
+            text(message.to_string())
+                .size(TYPE.sm)
+                .color(palette.text())
+        ]
+        .spacing(SPACE.s2)
+        .align_y(Center)
+        .into(),
     )
 }
 
 fn empty_state<'a>(palette: Palette) -> Element<'a, Message> {
     let icon_color = Color::from(palette.theme.border);
-    let icon = container(Space::new().width(Length::Fixed(26.0)).height(Length::Fixed(26.0))).style(move |_| {
-        container::Style::default().background(icon_color).border(Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: iced::border::radius(RADIUS.pill),
-        })
+    let icon = container(
+        Space::new()
+            .width(Length::Fixed(26.0))
+            .height(Length::Fixed(26.0)),
+    )
+    .style(move |_| {
+        container::Style::default()
+            .background(icon_color)
+            .border(Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: iced::border::radius(RADIUS.pill),
+            })
     });
 
     let body = column![
@@ -149,7 +183,10 @@ fn empty_state<'a>(palette: Palette) -> Element<'a, Message> {
     .align_x(Center)
     .width(Fill);
 
-    well(palette, container(body).width(Fill).padding(SPACE.s6).into())
+    // F5 (Task 7 fix wave): the empty state is the only primary surface
+    // visible on a fresh Home screen, so it needs the milled top edge too —
+    // the same helper the KPI tiles use once a round exists.
+    palette.card(true, container(body).width(Fill).padding(SPACE.s6))
 }
 
 // ---------------------------------------------------------------------
@@ -160,8 +197,12 @@ fn tiles<'a>(palette: Palette, result: &RoundResult) -> Element<'a, Message> {
     let download = throughput_value(result.down, "download", result.skipped_reason.as_deref());
     let upload = throughput_value(result.up, "upload", result.skipped_reason.as_deref());
     let idle = ping_idle_value(result.ping_idle, result.skipped_reason.as_deref());
-    let under_load =
-        ping_under_load_value(result.ping_down, result.ping_up, result.down_load, result.up_load);
+    let under_load = ping_under_load_value(
+        result.ping_down,
+        result.ping_up,
+        result.down_load,
+        result.up_load,
+    );
     let loss = loss_value(result.ping_idle, result.skipped_reason.as_deref());
 
     // `meta` (min/max/current, for the gauge's 2px tick) is `None` at every
@@ -190,26 +231,46 @@ fn kpi_tile<'a>(
     unit: &'static str,
     meta: Option<(f64, f64, f64)>,
 ) -> Element<'a, Message> {
-    let label_text = text(tracked(label)).size(TYPE.xs).font(font_medium()).color(palette.muted());
+    let label_text = text(tracked(label))
+        .size(TYPE.xs)
+        .font(font_medium())
+        .color(palette.muted());
 
     let value_row: Element<'a, Message> = match value {
         TileValue::Value(digits) => {
-            let numeral_font = iced::Font { weight: iced::font::Weight::Semibold, ..font_numeric() };
+            let numeral_font = iced::Font {
+                weight: iced::font::Weight::Semibold,
+                ..font_numeric()
+            };
             row![
-                text(digits.clone()).size(TYPE.xxl).font(numeral_font).color(palette.text()),
-                text(format!(" {unit}")).size(TYPE.sm).font(font_medium()).color(palette.muted()),
+                text(digits.clone())
+                    .size(TYPE.xxl)
+                    .font(numeral_font)
+                    .color(palette.text()),
+                text(format!(" {unit}"))
+                    .size(TYPE.sm)
+                    .font(font_medium())
+                    .color(palette.muted()),
             ]
             .align_y(Vertical::Bottom)
             .into()
         }
-        TileValue::Missing(reason) => {
-            text(reason.clone()).size(TYPE.sm).font(font_regular()).color(palette.muted()).into()
-        }
+        TileValue::Missing(reason) => text(reason.clone())
+            .size(TYPE.sm)
+            .font(font_regular())
+            .color(palette.muted())
+            .into(),
     };
 
-    let gauge = micro_gauge(palette, meta.map(|(min, max, current)| gauge_fraction(min, max, current)));
+    let gauge = micro_gauge(
+        palette,
+        meta.map(|(min, max, current)| gauge_fraction(min, max, current)),
+    );
 
-    palette.card(true, column![label_text, value_row, gauge].spacing(SPACE.s2))
+    palette.card(
+        true,
+        column![label_text, value_row, gauge].spacing(SPACE.s2),
+    )
 }
 
 const GAUGE_H: f32 = 9.0;
@@ -224,16 +285,25 @@ const GAUGE_TICK_H: f32 = 7.0;
 /// gallery's demo tile), so it stays correct at whatever width the tile
 /// actually renders at.
 fn micro_gauge<'a>(palette: Palette, tick_frac: Option<f32>) -> Element<'a, Message> {
-    let baseline_color = Color { a: 0.4, ..Color::from(palette.theme.border) };
-    let baseline_bar = container(Space::new().width(Fill).height(Length::Fixed(GAUGE_BAR_H))).style(move |_| {
-        container::Style::default().background(baseline_color).border(Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: iced::border::radius(RADIUS.pill),
-        })
-    });
-    let baseline_layer: Element<'a, Message> =
-        container(baseline_bar).width(Fill).height(Length::Fixed(GAUGE_H)).align_y(Vertical::Center).into();
+    let baseline_color = Color {
+        a: 0.4,
+        ..Color::from(palette.theme.border)
+    };
+    let baseline_bar = container(Space::new().width(Fill).height(Length::Fixed(GAUGE_BAR_H)))
+        .style(move |_| {
+            container::Style::default()
+                .background(baseline_color)
+                .border(Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: iced::border::radius(RADIUS.pill),
+                })
+        });
+    let baseline_layer: Element<'a, Message> = container(baseline_bar)
+        .width(Fill)
+        .height(Length::Fixed(GAUGE_H))
+        .align_y(Vertical::Center)
+        .into();
 
     let Some(fraction) = tick_frac else {
         return baseline_layer;
@@ -243,8 +313,12 @@ fn micro_gauge<'a>(palette: Palette, tick_frac: Option<f32>) -> Element<'a, Mess
     let before = ((fraction * 1000.0).round() as u16).max(1);
     let after = (((1.0 - fraction) * 1000.0).round() as u16).max(1);
     let tick_color = Color::from(palette.theme.accent_active);
-    let tick_mark = container(Space::new().width(Length::Fixed(GAUGE_TICK_W)).height(Length::Fixed(GAUGE_TICK_H)))
-        .style(move |_| container::Style::default().background(tick_color));
+    let tick_mark = container(
+        Space::new()
+            .width(Length::Fixed(GAUGE_TICK_W))
+            .height(Length::Fixed(GAUGE_TICK_H)),
+    )
+    .style(move |_| container::Style::default().background(tick_color));
     let tick_layer: Element<'a, Message> = row![
         Space::new().width(Length::FillPortion(before)),
         tick_mark,
@@ -303,12 +377,20 @@ pub(crate) enum TileValue {
 fn missing_reason(skipped_reason: Option<&str>, label: &str) -> String {
     let prefix = format!("{label}:");
     skipped_reason
-        .and_then(|reasons| reasons.split("; ").find(|segment| segment.starts_with(&prefix)))
+        .and_then(|reasons| {
+            reasons
+                .split("; ")
+                .find(|segment| segment.starts_with(&prefix))
+        })
         .map(|segment| segment.trim_start_matches(&prefix).trim().to_string())
         .unwrap_or_else(|| "not selected for this round".to_string())
 }
 
-fn throughput_value(value: Option<Throughput>, label: &str, skipped_reason: Option<&str>) -> TileValue {
+fn throughput_value(
+    value: Option<Throughput>,
+    label: &str,
+    skipped_reason: Option<&str>,
+) -> TileValue {
     match value {
         Some(t) => TileValue::Value(format!("{:.2}", t.bits_per_sec / 1_000_000.0)),
         None => TileValue::Missing(missing_reason(skipped_reason, label)),
@@ -347,10 +429,15 @@ fn ping_under_load_value(
     down_load: Option<LoadWindow>,
     up_load: Option<LoadWindow>,
 ) -> TileValue {
-    match (down_stats.and_then(|s| s.avg_ms), up_stats.and_then(|s| s.avg_ms)) {
+    match (
+        down_stats.and_then(|s| s.avg_ms),
+        up_stats.and_then(|s| s.avg_ms),
+    ) {
         (Some(down), Some(up)) => TileValue::Value(format!("{:.1}", (down + up) / 2.0)),
         (Some(value), None) | (None, Some(value)) => TileValue::Value(format!("{value:.1}")),
-        (None, None) => TileValue::Missing(under_load_missing_reason(down_stats, up_stats, down_load, up_load)),
+        (None, None) => TileValue::Missing(under_load_missing_reason(
+            down_stats, up_stats, down_load, up_load,
+        )),
     }
 }
 
@@ -394,11 +481,23 @@ mod tests {
     use std::time::Duration;
 
     fn stats(avg_ms: Option<f64>, loss_pct: f64) -> PingStats {
-        PingStats { avg_ms, min_ms: avg_ms, max_ms: avg_ms, jitter_ms: None, loss_pct, sent: 5 }
+        PingStats {
+            avg_ms,
+            min_ms: avg_ms,
+            max_ms: avg_ms,
+            jitter_ms: None,
+            loss_pct,
+            sent: 5,
+        }
     }
 
     fn throughput(mbit: f64) -> Throughput {
-        Throughput { bits_per_sec: mbit * 1_000_000.0, bytes: 0, duration: Duration::from_secs(10), capped: false }
+        Throughput {
+            bits_per_sec: mbit * 1_000_000.0,
+            bytes: 0,
+            duration: Duration::from_secs(10),
+            capped: false,
+        }
     }
 
     #[test]
@@ -435,7 +534,10 @@ mod tests {
 
     #[test]
     fn ping_idle_reads_the_average_when_something_answered() {
-        assert_eq!(ping_idle_value(Some(stats(Some(23.4), 0.0)), None), TileValue::Value("23.4".to_string()));
+        assert_eq!(
+            ping_idle_value(Some(stats(Some(23.4), 0.0)), None),
+            TileValue::Value("23.4".to_string())
+        );
     }
 
     #[test]
@@ -459,7 +561,10 @@ mod tests {
         // The exact case this release exists to get right: a measured 0.0%
         // loss must render as a genuine number, not collapse into the same
         // "missing" bucket as a metric that was never measured at all.
-        assert_eq!(loss_value(Some(stats(Some(10.0), 0.0)), None), TileValue::Value("0.00".to_string()));
+        assert_eq!(
+            loss_value(Some(stats(Some(10.0), 0.0)), None),
+            TileValue::Value("0.00".to_string())
+        );
     }
 
     #[test]
@@ -472,16 +577,29 @@ mod tests {
 
     #[test]
     fn ping_under_load_averages_both_phases_when_both_answered() {
-        let window = LoadWindow { duration: Duration::from_secs(10), ping_samples: 9, bytes: 1 };
+        let window = LoadWindow {
+            duration: Duration::from_secs(10),
+            ping_samples: 9,
+            bytes: 1,
+        };
         assert_eq!(
-            ping_under_load_value(Some(stats(Some(20.0), 0.0)), Some(stats(Some(30.0), 0.0)), Some(window), Some(window)),
+            ping_under_load_value(
+                Some(stats(Some(20.0), 0.0)),
+                Some(stats(Some(30.0), 0.0)),
+                Some(window),
+                Some(window)
+            ),
             TileValue::Value("25.0".to_string())
         );
     }
 
     #[test]
     fn ping_under_load_uses_whichever_phase_ran_when_only_one_did() {
-        let window = LoadWindow { duration: Duration::from_secs(10), ping_samples: 9, bytes: 1 };
+        let window = LoadWindow {
+            duration: Duration::from_secs(10),
+            ping_samples: 9,
+            bytes: 1,
+        };
         assert_eq!(
             ping_under_load_value(Some(stats(Some(20.0), 0.0)), None, Some(window), None),
             TileValue::Value("20.0".to_string())
@@ -490,7 +608,11 @@ mod tests {
 
     #[test]
     fn ping_under_load_with_total_loss_says_so() {
-        let window = LoadWindow { duration: Duration::from_secs(10), ping_samples: 9, bytes: 1 };
+        let window = LoadWindow {
+            duration: Duration::from_secs(10),
+            ping_samples: 9,
+            bytes: 1,
+        };
         assert_eq!(
             ping_under_load_value(Some(stats(None, 100.0)), None, Some(window), None),
             TileValue::Missing("no answer (100% loss)".to_string())
@@ -499,10 +621,16 @@ mod tests {
 
     #[test]
     fn ping_under_load_with_too_little_load_names_the_sample_count_not_a_skip() {
-        let window = LoadWindow { duration: Duration::from_secs(2), ping_samples: 2, bytes: 500 };
+        let window = LoadWindow {
+            duration: Duration::from_secs(2),
+            ping_samples: 2,
+            bytes: 500,
+        };
         assert_eq!(
             ping_under_load_value(None, None, Some(window), None),
-            TileValue::Missing("not enough load to measure (2 sample(s) in 2.0s of load)".to_string())
+            TileValue::Missing(
+                "not enough load to measure (2 sample(s) in 2.0s of load)".to_string()
+            )
         );
     }
 
@@ -517,8 +645,16 @@ mod tests {
     #[test]
     fn gauge_fraction_normalises_into_the_track() {
         assert_eq!(gauge_fraction(0.0, 100.0, 25.0), 0.25);
-        assert_eq!(gauge_fraction(0.0, 100.0, -10.0), 0.0, "below min clamps to the start of the track");
-        assert_eq!(gauge_fraction(0.0, 100.0, 200.0), 1.0, "above max clamps to the end of the track");
+        assert_eq!(
+            gauge_fraction(0.0, 100.0, -10.0),
+            0.0,
+            "below min clamps to the start of the track"
+        );
+        assert_eq!(
+            gauge_fraction(0.0, 100.0, 200.0),
+            1.0,
+            "above max clamps to the end of the track"
+        );
     }
 
     #[test]

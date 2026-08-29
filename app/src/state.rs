@@ -16,8 +16,10 @@ use iced::{window, Subscription, Task};
 use crate::chart::TimeRange;
 use crate::notify::{self, NotifyState};
 use crate::screens::settings::{
-    self, port_text_for, validate_new_target, NewTargetForm, SettingField, TargetField, UiSettings,
+    self, port_text_for, validate_new_target, NewTargetForm, SettingField, TargetField, ThemeMode,
+    UiSettings,
 };
+use crate::startup::{ScrollTarget, StartupFlags};
 use crate::theme::Palette;
 use crate::tray::{self, TrayHandle, TrayMessage};
 
@@ -99,6 +101,12 @@ pub enum Message {
     /// two targets sharing a name must not collapse into one row (carry-over
     /// C4 from the Task 4 verification).
     TargetsRefreshed(Vec<(usize, String, PingSample)>),
+    /// Stored ping samples for the enabled targets, loaded once at boot so
+    /// the Ping monitor can show real history before Start is ever pressed
+    /// (F1, plan 052 Task 7 fix wave). Keyed by target name, matched against
+    /// `App::ping_targets` by name rather than index — this only ever fills
+    /// in a target's *starting* samples, before any live index is meaningful.
+    PingHistoryLoaded(Vec<(String, Vec<PingSample>)>),
     Tick,
     StartPingMonitor,
     StopPingMonitor,
@@ -128,6 +136,10 @@ pub enum Message {
     /// The OS asked to close the window. `App::update` decides whether that
     /// means hide-to-tray or a real exit — see `tray::should_hide_on_close`.
     WindowCloseRequested(window::Id),
+    /// The OS theme's current mode, or a later change to it (Task 7
+    /// pre-work A1). Only consulted when `ui_settings.theme` is
+    /// `ThemeMode::System` — see [`App::palette`].
+    SystemThemeChanged(iced::theme::Mode),
 }
 
 /// The application's only long-lived state (plan 052 UI architecture: "a
@@ -135,6 +147,12 @@ pub enum Message {
 pub struct App {
     pub screen: Screen,
     pub settings: Settings,
+    /// Where `settings.toml` was loaded from and is saved back to: the
+    /// engine's own default path, or `--settings <path>` (Task 7 pre-work
+    /// B1 sibling — a screenshot run with a demo DB must never write into
+    /// the real user's settings file just because a setting happened to
+    /// change).
+    settings_path: PathBuf,
     /// Set at boot when the settings file exists but does not parse
     /// (`engine::Settings::load_or_create` never overwrites a broken hand
     /// edit, so this app must not pretend the compiled defaults it fell
@@ -185,19 +203,37 @@ pub struct App {
     start_minimized: bool,
     /// Threshold-notification cooldown state (Task 6 Step 3).
     notify_state: NotifyState,
+    /// The OS theme mode, as last reported by `iced::system::theme_changes`
+    /// (Task 7 pre-work A1). `Mode::None` until the boot-time query answers,
+    /// which `App::palette` treats the same as `Mode::Light`.
+    system_theme: iced::theme::Mode,
 }
 
 impl App {
-    pub fn boot(start_minimized: bool) -> (App, Task<Message>) {
-        let (settings, settings_error) = match Settings::load_or_create(&Settings::default_path()) {
+    pub fn boot(flags: StartupFlags) -> (App, Task<Message>) {
+        // `--settings <path>` (F1, plan 052 Task 7 fix wave): a demo DB and
+        // the real default settings file can name different targets, which
+        // was the root cause of the Ping monitor showing none — a
+        // screenshot run now points both at the same place.
+        let settings_path = flags
+            .settings
+            .clone()
+            .unwrap_or_else(Settings::default_path);
+        let (settings, settings_error) = match Settings::load_or_create(&settings_path) {
             Ok((settings, _created)) => (settings, None),
             Err(err) => (Settings::default(), Some(format!("settings: {err}"))),
         };
         let scheduler = Scheduler::new(settings.clone());
         let (history_from, history_to) =
             crate::screens::history::default_history_range(SystemTime::now());
-        let ui_settings_path = UiSettings::path_beside(&Settings::default_path());
-        let (ui_settings, ui_settings_error) = UiSettings::load_or_default(&ui_settings_path);
+        let ui_settings_path = UiSettings::path_beside(&settings_path);
+        let (mut ui_settings, ui_settings_error) = UiSettings::load_or_default(&ui_settings_path);
+        // `--theme` (Task 7 pre-work B1) overrides the loaded choice for this
+        // run only — it is never written back to `ui-settings.toml` (B1:
+        // "flags only affect startup; no new persistent state").
+        if let Some(theme) = flags.theme {
+            ui_settings.theme = theme;
+        }
         let interval_text = (settings.throughput_every.as_secs() / 60).to_string();
         let budget_gb_text = settings
             .daily_budget_bytes
@@ -207,6 +243,15 @@ impl App {
         let notify_download_mbit_text = ui_settings.notify_download_mbit.value.to_string();
         let notify_loss_pct_text = ui_settings.notify_loss_pct.value.to_string();
         let target_port_text = settings.targets.iter().map(port_text_for).collect();
+        // F1 (Task 7 fix wave): the Ping monitor lists every enabled target
+        // straight from settings, before Start is ever pressed — samples
+        // (if any) are filled in afterwards by `load_ping_history_task`.
+        let ping_targets = sync_ping_targets(&[], &settings);
+        let ping_history_task = load_ping_history_task(&settings);
+        let scroll_task = match flags.scroll {
+            Some(ScrollTarget::SettingsNotifications) => scroll_settings_to_notifications_task(),
+            None => Task::none(),
+        };
 
         // Spawned here (App::boot runs on the winit thread before `.run()`
         // starts pumping it — see tray.rs's module doc) so the tray's
@@ -221,10 +266,13 @@ impl App {
         let toast = ui_settings_error
             .map(|message| Toast { ok: false, message })
             .or_else(|| tray_error.map(|message| Toast { ok: false, message }));
+        // `--screen` (B1) picks the initial tab; unset falls back to Home.
+        let screen = flags.screen.unwrap_or_default();
         (
             App {
-                screen: Screen::default(),
+                screen,
                 settings,
+                settings_path,
                 settings_error,
                 round_running: false,
                 last_round: None,
@@ -238,7 +286,7 @@ impl App {
                 history_rows: Vec::new(),
                 ping_running: false,
                 clock_armed: false,
-                ping_targets: Vec::new(),
+                ping_targets,
                 toast,
                 load_error: None,
                 ui_settings,
@@ -251,24 +299,51 @@ impl App {
                 new_target: NewTargetForm::default(),
                 tray,
                 window_id: None,
-                start_minimized,
+                start_minimized: flags.minimized,
                 notify_state: NotifyState::default(),
+                system_theme: iced::theme::Mode::None,
             },
             Task::batch([
                 load_chart_task(),
                 load_history_task(history_from, history_to),
+                ping_history_task,
+                scroll_task,
                 Task::stream(tray_receiver.map(Message::Tray)),
                 window::oldest().map(Message::WindowIdReady),
+                iced::system::theme().map(Message::SystemThemeChanged),
             ]),
         )
+    }
+
+    /// The active [`Palette`] (Task 7 pre-work A1): resolved once here from
+    /// `ui_settings.theme` and handed to every screen's `view` — the one
+    /// place in the app that turns a theme choice into an actual palette, so
+    /// no screen can hardcode `Palette::light()` and quietly disagree with
+    /// the rest. `System` follows `system_theme`, the OS mode iced reports
+    /// through `iced::system::theme_changes`; `Mode::None` (not yet known,
+    /// or the OS did not say) reads as light, the same default the token
+    /// mode enum itself uses.
+    pub fn palette(&self) -> Palette {
+        match self.ui_settings.theme {
+            ThemeMode::Light => Palette::light(),
+            ThemeMode::Dark => Palette::dark(),
+            ThemeMode::System => match self.system_theme {
+                iced::theme::Mode::Dark => Palette::dark(),
+                iced::theme::Mode::Light | iced::theme::Mode::None => Palette::light(),
+            },
+        }
     }
 
     /// Window-close and tray-driven events, alongside the existing
     /// Task-based tick loop (`sleep_then_tick`). `close_requests` has no
     /// Task equivalent — it must be listened for continuously, not fetched
-    /// once — so this is the app's only `Subscription`.
+    /// once — so these, plus live OS theme changes (A1), are the app's only
+    /// `Subscription`s.
     pub fn subscription(&self) -> Subscription<Message> {
-        window::close_requests().map(Message::WindowCloseRequested)
+        Subscription::batch([
+            window::close_requests().map(Message::WindowCloseRequested),
+            iced::system::theme_changes().map(Message::SystemThemeChanged),
+        ])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -295,6 +370,7 @@ impl App {
                 Task::none()
             }
             Message::TargetsRefreshed(samples) => self.on_targets_refreshed(samples),
+            Message::PingHistoryLoaded(history) => self.on_ping_history_loaded(history),
             Message::Tick => self.on_tick(),
             Message::StartPingMonitor => self.start_ping_monitor(),
             Message::StopPingMonitor => {
@@ -356,6 +432,10 @@ impl App {
             Message::Tray(message) => self.on_tray_message(message),
             Message::WindowIdReady(id) => self.on_window_id_ready(id),
             Message::WindowCloseRequested(id) => self.on_close_requested(id),
+            Message::SystemThemeChanged(mode) => {
+                self.system_theme = mode;
+                Task::none()
+            }
         }
     }
 
@@ -533,14 +613,10 @@ impl App {
             return Task::none();
         }
         self.ping_running = true;
-        self.ping_targets = enabled_targets(&self.settings)
-            .into_iter()
-            .map(|target| TargetLive {
-                name: target.name.clone(),
-                probe: target.probe.clone(),
-                samples: Vec::new(),
-            })
-            .collect();
+        // F1 (Task 7 fix wave): re-sync rather than rebuild from scratch, so
+        // Start keeps whatever history the row already shows (from settings
+        // plus the store) instead of wiping it back to empty.
+        self.ping_targets = sync_ping_targets(&self.ping_targets, &self.settings);
         if self.ping_targets.is_empty() {
             self.ping_running = false;
             self.toast = Some(Toast {
@@ -570,6 +646,28 @@ impl App {
         } else {
             Task::none()
         }
+    }
+
+    /// F1 (Task 7 fix wave): fills in a target's starting samples from the
+    /// store, matched by name. Only when the row is still empty — a live
+    /// sample that already arrived (the live loop is much faster than this
+    /// one-shot load) must never be overwritten by older, stored history.
+    fn on_ping_history_loaded(&mut self, history: Vec<(String, Vec<PingSample>)>) -> Task<Message> {
+        for (name, samples) in history {
+            if samples.is_empty() {
+                continue;
+            }
+            if let Some(target) = self
+                .ping_targets
+                .iter_mut()
+                .find(|target| target.name == name)
+            {
+                if target.samples.is_empty() {
+                    target.samples = samples;
+                }
+            }
+        }
+        Task::none()
     }
 
     // -------------------------------------------------------------
@@ -759,18 +857,22 @@ impl App {
     }
 
     /// Push the changed `self.settings` into the running scheduler (so the
-    /// next round already sees it — Step 4) and persist both settings files.
+    /// next round already sees it — Step 4), resync the Ping monitor's
+    /// target list (F1, Task 7 fix wave — a target add/remove/toggle must
+    /// show up there immediately, not just after Start), and persist both
+    /// settings files.
     fn commit_settings(&mut self) -> Task<Message> {
         self.scheduler.update_settings(self.settings.clone());
+        self.ping_targets = sync_ping_targets(&self.ping_targets, &self.settings);
         self.persist_settings()
     }
 
     fn persist_settings(&self) -> Task<Message> {
         let settings = self.settings.clone();
         let ui_settings = self.ui_settings.clone();
+        let settings_path = self.settings_path.clone();
         Task::perform(
             async move {
-                let settings_path = Settings::default_path();
                 settings
                     .save(&settings_path)
                     .map_err(|err| err.to_string())?;
@@ -784,8 +886,9 @@ impl App {
     /// settings file when only a UI-only preference changed.
     fn persist_ui_settings(&self) -> Task<Message> {
         let ui_settings = self.ui_settings.clone();
+        let settings_path = self.settings_path.clone();
         Task::perform(
-            async move { ui_settings.save(&UiSettings::path_beside(&Settings::default_path())) },
+            async move { ui_settings.save(&UiSettings::path_beside(&settings_path)) },
             Message::SettingsSaved,
         )
     }
@@ -810,6 +913,80 @@ fn enabled_targets(settings: &Settings) -> Vec<&TargetSpec> {
         .iter()
         .filter(|target| target.enabled)
         .collect()
+}
+
+/// Rebuilds the Ping monitor's live target list from `settings`'s enabled
+/// targets (F1, plan 052 Task 7 fix wave: the list is populated from
+/// settings directly, not only once Start is pressed). Any target whose
+/// name matches one already in `existing` keeps its samples — a settings
+/// edit, or pressing Start, must never throw away history the row is
+/// already showing.
+fn sync_ping_targets(existing: &[TargetLive], settings: &Settings) -> Vec<TargetLive> {
+    enabled_targets(settings)
+        .into_iter()
+        .map(|target| {
+            let samples = existing
+                .iter()
+                .find(|live| live.name == target.name)
+                .map(|live| live.samples.clone())
+                .unwrap_or_default();
+            TargetLive {
+                name: target.name.clone(),
+                probe: target.probe.clone(),
+                samples,
+            }
+        })
+        .collect()
+}
+
+/// Loads each enabled target's stored ping samples once at boot (F1, Task 7
+/// fix wave), so the Ping monitor can show real history before Start.
+fn load_ping_history_task(settings: &Settings) -> Task<Message> {
+    let names: Vec<String> = enabled_targets(settings)
+        .into_iter()
+        .map(|target| target.name.clone())
+        .collect();
+    Task::perform(load_ping_history(names), Message::PingHistoryLoaded)
+}
+
+async fn load_ping_history(names: Vec<String>) -> Vec<(String, Vec<PingSample>)> {
+    let Ok(store) = open_store() else {
+        return Vec::new();
+    };
+    names
+        .into_iter()
+        .filter_map(|name| {
+            store
+                .ping_sample_rtts_for(&name)
+                .ok()
+                .map(|rtts| (name, rtts_to_samples(rtts)))
+        })
+        .collect()
+}
+
+/// `ping_sample_rtts_for` returns bare `rtt_ms` values, oldest first, with no
+/// timestamp column to rebuild `PingSample::at` from — this app's own stats,
+/// sparkline and "is failing" logic only ever read `rtt`, never `at`, so
+/// `SystemTime::now()` is a harmless placeholder here, not a real
+/// measurement time.
+fn rtts_to_samples(rtts: Vec<Option<f64>>) -> Vec<PingSample> {
+    rtts.into_iter()
+        .map(|rtt_ms| PingSample {
+            at: SystemTime::now(),
+            rtt: rtt_ms.map(|ms| Duration::from_secs_f64(ms / 1000.0)),
+        })
+        .collect()
+}
+
+/// `--scroll settings-notifications` (F4, Task 7 fix wave): snaps the
+/// Settings screen's own scrollable to the bottom once at boot.
+fn scroll_settings_to_notifications_task() -> Task<Message> {
+    iced::advanced::widget::operate(iced::advanced::widget::operation::scrollable::snap_to::<
+        Message,
+    >(
+        crate::screens::settings::body_scrollable_id(),
+        iced::widget::scrollable::RelativeOffset::END.into(),
+    ))
 }
 
 fn sleep_then_tick() -> Task<Message> {
@@ -1003,7 +1180,15 @@ fn open_store() -> Result<alidade_store::Store, String> {
 /// in `alidade export` and vice versa. Not exported by `alidade-store` (the
 /// CLI does not export its own copy either), so it is mirrored here rather
 /// than reaching into a sibling crate's binary.
+///
+/// `ALIDADE_DB_PATH`, set from the `--db` startup flag (Task 7 pre-work B1),
+/// names the exact file to open — unlike `ALIDADE_DATA_DIR` below it is not
+/// joined with `Alidade/alidade.db`, since a screenshot run needs a literal,
+/// caller-chosen path (e.g. a demo DB in a scratch temp directory).
 pub(crate) fn default_db_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("ALIDADE_DB_PATH") {
+        return PathBuf::from(path);
+    }
     let base = std::env::var_os("ALIDADE_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
@@ -1047,6 +1232,7 @@ mod tests {
         App {
             screen: Screen::default(),
             settings,
+            settings_path: Settings::default_path(),
             settings_error: None,
             round_running: false,
             last_round: None,
@@ -1075,6 +1261,7 @@ mod tests {
             window_id: None,
             start_minimized: false,
             notify_state: NotifyState::default(),
+            system_theme: iced::theme::Mode::None,
         }
     }
 
@@ -1145,6 +1332,65 @@ mod tests {
         );
     }
 
+    fn target(name: &str, enabled: bool) -> TargetSpec {
+        TargetSpec {
+            name: name.to_string(),
+            probe: Probe::Icmp {
+                host: "127.0.0.1".to_string(),
+            },
+            verified: true,
+            enabled,
+        }
+    }
+
+    /// F1 (Task 7 fix wave): the Ping monitor's target list comes straight
+    /// from settings' enabled targets, with no `ping_running` check at all —
+    /// so a row exists for every enabled target before Start is ever
+    /// pressed, and a disabled target gets none.
+    #[test]
+    fn sync_ping_targets_lists_every_enabled_settings_target_before_start() {
+        let settings = Settings {
+            targets: vec![
+                target("on-a", true),
+                target("off", false),
+                target("on-b", true),
+            ],
+            ..Settings::default()
+        };
+        let synced = sync_ping_targets(&[], &settings);
+        let names: Vec<&str> = synced.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["on-a", "on-b"]);
+        assert!(
+            synced.iter().all(|t| t.samples.is_empty()),
+            "no samples yet, but the row must still exist"
+        );
+    }
+
+    /// F1: resyncing (a settings edit, or pressing Start) must not throw
+    /// away samples a row is already showing for a target that is still
+    /// enabled.
+    #[test]
+    fn sync_ping_targets_preserves_existing_samples_by_name() {
+        let settings = Settings {
+            targets: vec![target("on-a", true)],
+            ..Settings::default()
+        };
+        let existing = vec![TargetLive {
+            name: "on-a".to_string(),
+            probe: Probe::Icmp {
+                host: "127.0.0.1".to_string(),
+            },
+            samples: vec![sample(42)],
+        }];
+        let synced = sync_ping_targets(&existing, &settings);
+        assert_eq!(synced.len(), 1);
+        assert_eq!(
+            synced[0].samples[0].rtt,
+            Some(Duration::from_millis(42)),
+            "history must survive a resync"
+        );
+    }
+
     /// Task 6 Step 1: the tray's "Pause continuous" item must leave the app
     /// in exactly the state the in-window Pause button does — proven by
     /// routing both through the same `Message::Pause`, not by duplicating
@@ -1188,5 +1434,62 @@ mod tests {
         let _ = app.on_window_id_ready(Some(id));
         assert_eq!(app.window_id, Some(id));
         assert!(!app.start_minimized, "the flag must not stay armed");
+    }
+
+    // -----------------------------------------------------------------
+    // Task 7 pre-work A3: every `ThemeMode` resolves to the expected
+    // palette, and the Settings change path (`SettingField::Theme`) updates
+    // the palette `App::palette()` returns — without touching a real
+    // window or renderer.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn each_theme_mode_resolves_to_the_expected_palette() {
+        let mut app = test_app();
+
+        app.ui_settings.theme = ThemeMode::Light;
+        assert!(
+            !app.palette().dark,
+            "Light must resolve to the light palette"
+        );
+
+        app.ui_settings.theme = ThemeMode::Dark;
+        assert!(app.palette().dark, "Dark must resolve to the dark palette");
+
+        app.ui_settings.theme = ThemeMode::System;
+        app.system_theme = iced::theme::Mode::Dark;
+        assert!(app.palette().dark, "System must follow a dark OS report");
+
+        app.system_theme = iced::theme::Mode::Light;
+        assert!(!app.palette().dark, "System must follow a light OS report");
+
+        app.system_theme = iced::theme::Mode::None;
+        assert!(
+            !app.palette().dark,
+            "System with no OS answer yet must read as light, not panic or guess dark"
+        );
+    }
+
+    #[test]
+    fn changing_the_theme_setting_updates_the_resolved_palette_immediately() {
+        let mut app = test_app();
+        assert!(
+            !app.palette().dark,
+            "default System + no OS report yet starts light"
+        );
+
+        let _ = app.update(Message::SettingChanged(SettingField::Theme(
+            ThemeMode::Dark,
+        )));
+        assert_eq!(app.ui_settings.theme, ThemeMode::Dark);
+        assert!(
+            app.palette().dark,
+            "the very next render must see the dark palette, with no extra step"
+        );
+
+        let _ = app.update(Message::SettingChanged(SettingField::Theme(
+            ThemeMode::Light,
+        )));
+        assert!(!app.palette().dark);
     }
 }

@@ -12,8 +12,9 @@ use crate::ui::{font_medium, font_regular};
 
 use super::{days_from_civil, format_ymd, newest_rows, rounds_table, with_toast};
 
-pub fn view(app: &App) -> Element<'_, Message> {
-    let palette = Palette::light();
+// Task 7 pre-work A1: `palette` now comes from the caller instead of a
+// hardcoded `Palette::light()`.
+pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
     let from = picker(
         palette,
         "From",

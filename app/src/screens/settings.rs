@@ -12,12 +12,11 @@
 //!   this module owns a small sibling file (`ui-settings.toml`, next to the
 //!   engine's `settings.toml`) with the same temp-file-then-rename recipe.
 //!
-//! Live app-wide theme switching is out of scope for this task: every other
-//! screen module (`continuous.rs`, `ping_monitor.rs`) hardcodes
-//! `Palette::light()` and neither file is in this task's file list, so
-//! wiring only the shell (`ui.rs`) would show a themed tab strip over
-//! light-only content, which is worse than deferring it. This screen only
-//! captures and persists the choice.
+//! Live app-wide theme switching (Task 7 pre-work A1): `App::palette`
+//! resolves the active `Palette` from this screen's `theme` choice and every
+//! screen module now takes it as a parameter instead of hardcoding
+//! `Palette::light()`. This screen still only captures and persists the
+//! choice — `App::palette` is where it actually takes effect.
 
 use std::fmt;
 use std::fs;
@@ -442,9 +441,18 @@ pub(crate) fn today_usage_gb(
 // View
 // ---------------------------------------------------------------------
 
-pub fn view(app: &App) -> Element<'_, Message> {
-    let palette = Palette::light();
+/// Id of this screen's own scrollable body. `--scroll settings-notifications`
+/// (F4, plan 052 Task 7 fix wave) snaps it to the bottom once at boot, so a
+/// screenshot taken right after launch can prove the Notifications block —
+/// which sits below the fold at 1280x800 — is reachable, without guessing at
+/// whether a tighter vertical rhythm alone would fit every row on screen.
+pub fn body_scrollable_id() -> iced::widget::Id {
+    iced::widget::Id::new("settings-body")
+}
 
+// Task 7 pre-work A1: `palette` now comes from the caller instead of a
+// hardcoded `Palette::light()`.
+pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
     let body = column![
         section_title(palette, "Measurement"),
         interval_row(palette, app),
@@ -464,7 +472,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
     with_toast(
         palette,
         app,
-        scrollable(body).width(Fill).height(Fill).into(),
+        scrollable(body)
+            .id(body_scrollable_id())
+            .width(Fill)
+            .height(Fill)
+            .into(),
     )
 }
 
@@ -620,7 +632,7 @@ fn targets_table(palette: Palette, app: &App) -> Element<'_, Message> {
     for (index, target) in app.settings.targets.iter().enumerate() {
         rows.push(target_row(palette, app, index, target));
     }
-    palette.well_frame(column(rows).spacing(SPACE.s3).width(Fill))
+    palette.well_frame(true, column(rows).spacing(SPACE.s3).width(Fill))
 }
 
 fn header_cell<'a>(palette: Palette, label: &'static str, portion: u16) -> Element<'a, Message> {

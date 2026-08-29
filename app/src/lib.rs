@@ -11,6 +11,7 @@
 pub mod chart;
 pub mod notify;
 pub mod screens;
+pub mod startup;
 pub mod state;
 pub mod theme;
 pub mod tray;

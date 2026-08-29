@@ -6,7 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-iced = { version = "0.14.0", features = ["canvas", "tokio"] }
+# "advanced" (F4, plan 052 Task 7 fix wave): needed for
+# `iced::advanced::widget::operate` + `operation::scrollable::snap_to`, the
+# `--scroll settings-notifications` boot task.
+iced = { version = "0.14.0", features = ["canvas", "tokio", "advanced"] }
 design-tokens = { path = "vendor/crates/design-tokens", features = ["iced"] }
 alidade-engine = { path = "../engine" }
 alidade-store = { path = "../store" }

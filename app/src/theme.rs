@@ -99,14 +99,40 @@ impl Palette {
         Duration::from_millis(MOTION.live.round().max(1.0) as u64)
     }
 
-    /// Recessed data well: lightness only, no inset shadow.
+    /// Recessed data well: lightness only, no inset shadow. `milled`
+    /// prepends the same 2px top strip [`Palette::card`] uses
+    /// (`rule_design_language.md` signature (a)) inside the same
+    /// padded/bordered container, for well-style table containers that need
+    /// the milled signature too (F5, plan 052 Task 7 fix wave: History,
+    /// Continuous and the Settings targets table were missing it — a toast
+    /// stays unmilled, it is neither a card nor a table).
     pub fn well_frame<'a, Message: 'a>(
         &self,
+        milled: bool,
         content: impl Into<Element<'a, Message>>,
     ) -> Element<'a, Message> {
+        let t = *self.theme;
         let border = self.border();
         let well = self.well();
-        container(content)
+        let content = content.into();
+        let inner: Element<'a, Message> = if milled {
+            let strip_color = if self.dark {
+                col(t.milled)
+            } else {
+                col(t.border_top)
+            };
+            let strip: Element<'a, Message> =
+                container(space::horizontal().height(Length::Fixed(2.0)))
+                    .width(Length::Fill)
+                    .style(move |_| container::Style::default().background(strip_color))
+                    .into();
+            iced::widget::column![strip, content]
+                .spacing(SPACE.s3)
+                .into()
+        } else {
+            content
+        };
+        container(inner)
             .padding(SPACE.s3)
             .width(Length::Fill)
             .style(move |_| {

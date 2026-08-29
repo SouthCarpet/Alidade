@@ -16,8 +16,9 @@ use super::{format_ms, format_pct, with_toast};
 
 pub(crate) const SPARKLINE_SAMPLES: usize = 60;
 
-pub fn view(app: &App) -> Element<'_, Message> {
-    let palette = Palette::light();
+// Task 7 pre-work A1: `palette` now comes from the caller instead of a
+// hardcoded `Palette::light()`.
+pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
     let start_stop = if app.ping_running {
         button(text("Stop").size(TYPE.sm).font(font_medium()))
             .padding([SPACE.s2, SPACE.s4])
@@ -87,9 +88,14 @@ fn target_row<'a>(palette: Palette, target: &TargetLive) -> Element<'a, Message>
         palette.text()
     };
     let stats = target_stats(target);
+    // F1 (Task 7 fix wave): the row now renders before Start too, from
+    // settings plus whatever the store already has for this target, so
+    // "never probed at all" and "just probed and got no answer" need
+    // different text — the first is not a result yet, the second is a
+    // real, failing one and must never look like a plain dash.
     let current = match current_rtt_ms(target) {
         Some(ms) => format_ms(Some(ms)),
-        None if target.samples.is_empty() => format_ms(None),
+        None if target.samples.is_empty() => "no samples yet".to_string(),
         None => "no answer".to_string(),
     };
     let spark = sparkline_points(&target.samples, SPARKLINE_SAMPLES);

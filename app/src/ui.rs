@@ -35,11 +35,11 @@ pub fn font_numeric() -> Font {
 
 impl App {
     /// Renders the five-screen tab strip and the active screen's content.
-    /// Settings still renders Task 1's empty placeholder until Task 5.
+    /// Task 7 pre-work A1: the active palette is resolved exactly once here
+    /// (`App::palette`, from `UiSettings.theme`) and handed to every screen
+    /// — no screen resolves its own theme any more.
     pub fn view(&self) -> Element<'_, Message> {
-        // Theme switching is Task 5's job (the Settings screen); this task
-        // hardcodes light.
-        let palette = Palette::light();
+        let palette = self.palette();
 
         let tabs = row(Screen::ALL
             .into_iter()
@@ -47,11 +47,11 @@ impl App {
         .spacing(SPACE.s6);
 
         let content: Element<'_, Message> = match self.screen {
-            Screen::Home => crate::screens::home::view(self),
-            Screen::Continuous => crate::screens::continuous::view(self),
-            Screen::PingMonitor => crate::screens::ping_monitor::view(self),
-            Screen::History => crate::screens::history::view(self),
-            Screen::Settings => crate::screens::settings::view(self),
+            Screen::Home => crate::screens::home::view(self, palette),
+            Screen::Continuous => crate::screens::continuous::view(self, palette),
+            Screen::PingMonitor => crate::screens::ping_monitor::view(self, palette),
+            Screen::History => crate::screens::history::view(self, palette),
+            Screen::Settings => crate::screens::settings::view(self, palette),
         };
 
         let body = column![tabs, content]
