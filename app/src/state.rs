@@ -11,7 +11,7 @@ use alidade_engine::{
 use alidade_store::RoundRow;
 use iced::futures::channel::mpsc;
 use iced::futures::StreamExt;
-use iced::{window, Subscription, Task};
+use iced::{clipboard, window, Subscription, Task};
 
 use crate::chart::TimeRange;
 use crate::notify::{self, NotifyState};
@@ -97,6 +97,7 @@ pub enum Message {
     Resume,
     ExportCsv,
     ExportFinished(Result<PathBuf, String>),
+    CopyDiagnostics,
     /// `usize` is the row's index into `App::ping_targets`, not its name —
     /// two targets sharing a name must not collapse into one row (carry-over
     /// C4 from the Task 4 verification).
@@ -369,6 +370,7 @@ impl App {
                 self.toast = Some(toast_from_export(result));
                 Task::none()
             }
+            Message::CopyDiagnostics => self.copy_diagnostics(),
             Message::TargetsRefreshed(samples) => self.on_targets_refreshed(samples),
             Message::PingHistoryLoaded(history) => self.on_ping_history_loaded(history),
             Message::Tick => self.on_tick(),
@@ -606,6 +608,29 @@ impl App {
         };
         let path = default_export_path();
         Task::perform(export_csv(from, to, path), Message::ExportFinished)
+    }
+
+    fn copy_diagnostics(&mut self) -> Task<Message> {
+        let (from, to) = match crate::screens::history::parse_history_bounds(
+            &self.history_from,
+            &self.history_to,
+        ) {
+            Ok(bounds) => bounds,
+            Err(err) => {
+                self.toast = Some(Toast {
+                    ok: false,
+                    message: err,
+                });
+                return Task::none();
+            }
+        };
+        let summary =
+            crate::diagnostics::summary(&self.history_rows, (from, to), env!("CARGO_PKG_VERSION"));
+        self.toast = Some(Toast {
+            ok: true,
+            message: "Diagnostics copied".to_string(),
+        });
+        clipboard::write(summary)
     }
 
     fn start_ping_monitor(&mut self) -> Task<Message> {

@@ -9,6 +9,7 @@
 //! from the outside.
 
 pub mod chart;
+pub mod diagnostics;
 pub mod notify;
 pub mod screens;
 pub mod startup;

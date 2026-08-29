@@ -26,11 +26,17 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
         .padding([SPACE.s2, SPACE.s4])
         .style(palette.btn_primary())
         .on_press(Message::ExportCsv);
+    let diagnostics = button(text("Copy diagnostics").size(TYPE.sm).font(font_medium()))
+        .padding([SPACE.s2, SPACE.s4])
+        .style(palette.btn_secondary())
+        .on_press(Message::CopyDiagnostics);
 
     let shown = newest_rows(&app.history_rows, app.history_rows.len());
 
     let body = column![
-        row![from, to, export].spacing(SPACE.s4).align_y(Center),
+        row![from, to, export, diagnostics]
+            .spacing(SPACE.s4)
+            .align_y(Center),
         text(format!("{} rounds in range", app.history_rows.len()))
             .size(TYPE.xs)
             .font(font_regular())
