@@ -43,7 +43,7 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
             if outcome.result.capped {
                 sections.push(banner(
                     palette,
-                    "capped — the daily data budget ended a throughput phase early",
+                    "capped: the daily data budget ended a throughput phase early",
                 ));
             }
             sections.push(tiles(palette, &outcome.result));
@@ -174,7 +174,7 @@ fn empty_state<'a>(palette: Palette) -> Element<'a, Message> {
 
     let body = column![
         icon,
-        text("No rounds yet — run a single test or start continuous mode.")
+        text("No rounds yet. Run a single test or start continuous mode.")
             .size(TYPE.sm)
             .font(font_medium())
             .color(palette.text()),

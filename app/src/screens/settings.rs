@@ -523,7 +523,7 @@ fn interval_row(palette: Palette, app: &App) -> Element<'_, Message> {
     if invalid {
         column_items.push(note(
             palette,
-            "not saved yet — enter a whole number of minutes, at least 1".to_string(),
+            "not saved yet: enter a whole number of minutes, at least 1".to_string(),
         ));
     }
     column(column_items).spacing(SPACE.s1).into()
@@ -602,7 +602,7 @@ fn budget_section(palette: Palette, app: &App) -> Element<'_, Message> {
         if invalid {
             items.push(note(
                 palette,
-                "not saved yet — enter a GB value greater than zero".to_string(),
+                "not saved yet: enter a GB value greater than zero".to_string(),
             ));
         }
         let usage = today_usage_gb(
