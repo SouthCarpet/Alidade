@@ -1,11 +1,20 @@
 # Install Alidade
 
-## Windows binary
+## Windows installer
+
+1. Download `alidade-setup-<version>.exe` from the [GitHub Releases page](https://github.com/SouthCarpet/Alidade/releases).
+2. Run it. It installs for your user only, so there is no admin prompt.
+3. It adds a desktop shortcut (you can turn this off in the wizard) and a Start Menu shortcut.
+4. To remove Alidade, use **Settings > Apps** (or Programs and Features). The uninstaller asks whether to delete measured data (the database and settings) or keep it.
+
+The installer is unsigned. Windows SmartScreen may show a warning because it cannot establish a publisher reputation for an unsigned file. If you downloaded the file from this project's Releases page and choose to run it, select **More info**, then **Run anyway**. Do not disable SmartScreen.
+
+## Windows binary (portable)
 
 1. Download the `.exe` you need from the [GitHub Releases page](https://github.com/SouthCarpet/Alidade/releases).
 2. Put it in a folder you control and run it from PowerShell or Command Prompt.
 
-There is no installer. The binaries are unsigned. Windows SmartScreen may show a warning because it cannot establish a publisher reputation for an unsigned file. If you downloaded the file from this project's Releases page and choose to run it, select **More info**, then **Run anyway**. Do not disable SmartScreen.
+There is no install step and nothing to remove. The same SmartScreen warning applies; see above.
 
 For a first measurement:
 

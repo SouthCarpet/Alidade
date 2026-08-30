@@ -25,6 +25,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
       - run: cargo build --workspace --release
+      - name: Build installer
+        shell: pwsh
+        run: .\packaging\build-installer.ps1 -SkipBuild
       - name: Extract release notes
         shell: pwsh
         run: |
@@ -44,3 +47,4 @@ jobs:
           files: |
             target/release/alidade.exe
             target/release/alidade-app.exe
+            target/installer/alidade-setup-*.exe

@@ -22,6 +22,7 @@ use crate::screens::settings::{
 use crate::startup::{ScrollTarget, StartupFlags};
 use crate::theme::Palette;
 use crate::tray::{self, TrayHandle, TrayMessage};
+use crate::update;
 
 /// One of the app's five top-level views. The tab strip switches between
 /// them; each screen's content lands in Tasks 2, 4 and 5.
@@ -141,6 +142,14 @@ pub enum Message {
     /// pre-work A1). Only consulted when `ui_settings.theme` is
     /// `ThemeMode::System` — see [`App::palette`].
     SystemThemeChanged(iced::theme::Mode),
+    /// The opt-in boot-time GitHub check finished (plan 064 Task 2). `None`
+    /// covers "opted out", "no newer release", and every failure alike —
+    /// the caller never learns which.
+    UpdateChecked(Option<update::Release>),
+    /// The header's "Dostupná je verzia" link was pressed. Opens
+    /// `App::available_update`'s release page in the browser; never
+    /// downloads anything.
+    OpenReleasePage,
 }
 
 /// The application's only long-lived state (plan 052 UI architecture: "a
@@ -208,6 +217,10 @@ pub struct App {
     /// (Task 7 pre-work A1). `Mode::None` until the boot-time query answers,
     /// which `App::palette` treats the same as `Mode::Light`.
     system_theme: iced::theme::Mode,
+    /// A newer GitHub release, set once `Message::UpdateChecked` arrives
+    /// (plan 064 Task 2). `None` until then, and stays `None` when the
+    /// check is off, finds nothing newer, or fails.
+    pub available_update: Option<update::Release>,
 }
 
 impl App {
@@ -252,6 +265,13 @@ impl App {
         let scroll_task = match flags.scroll {
             Some(ScrollTarget::SettingsNotifications) => scroll_settings_to_notifications_task(),
             None => Task::none(),
+        };
+        // Plan 064 Task 2: one opt-in GitHub check, only when the user has
+        // said yes on the Settings screen.
+        let update_task = if wants_update_check(&ui_settings) {
+            update_check_task()
+        } else {
+            Task::none()
         };
 
         // Spawned here (App::boot runs on the winit thread before `.run()`
@@ -303,12 +323,14 @@ impl App {
                 start_minimized: flags.minimized,
                 notify_state: NotifyState::default(),
                 system_theme: iced::theme::Mode::None,
+                available_update: None,
             },
             Task::batch([
                 load_chart_task(),
                 load_history_task(history_from, history_to),
                 ping_history_task,
                 scroll_task,
+                update_task,
                 Task::stream(tray_receiver.map(Message::Tray)),
                 window::oldest().map(Message::WindowIdReady),
                 iced::system::theme().map(Message::SystemThemeChanged),
@@ -438,6 +460,11 @@ impl App {
                 self.system_theme = mode;
                 Task::none()
             }
+            Message::UpdateChecked(release) => {
+                self.available_update = release;
+                Task::none()
+            }
+            Message::OpenReleasePage => self.open_release_page(),
         }
     }
 
@@ -471,6 +498,16 @@ impl App {
             Some(id) => window::set_mode(id, window::Mode::Windowed),
             None => Task::none(),
         }
+    }
+
+    /// Opens the pending release's page in the browser. Never downloads or
+    /// installs anything; a failure to launch a browser is not worth a
+    /// toast over.
+    fn open_release_page(&self) -> Task<Message> {
+        if let Some(release) = &self.available_update {
+            let _ = open::that(&release.url);
+        }
+        Task::none()
     }
 
     /// Task 6 Step 2: hide to the tray instead of exiting, except when
@@ -743,6 +780,10 @@ impl App {
                 self.ui_settings.autostart = value;
                 return self.persist_ui_settings();
             }
+            SettingField::CheckUpdates(value) => {
+                self.ui_settings.check_updates = value;
+                return self.persist_ui_settings();
+            }
             SettingField::BudgetEnabled(enabled) => {
                 self.settings.daily_budget_bytes = if enabled {
                     Some(settings::parse_gb_to_bytes(&self.budget_gb_text).unwrap_or(5_000_000_000))
@@ -1012,6 +1053,31 @@ fn scroll_settings_to_notifications_task() -> Task<Message> {
         crate::screens::settings::body_scrollable_id(),
         iced::widget::scrollable::RelativeOffset::END.into(),
     ))
+}
+
+/// Pure: whether `App::boot` should schedule the update-check task, given
+/// only the persisted opt-in flag. Kept separate from the async plumbing so
+/// the on/off decision is unit-testable without a `Task`.
+fn wants_update_check(ui: &UiSettings) -> bool {
+    ui.check_updates
+}
+
+/// One unauthenticated GitHub check (plan 064 Task 2). The client is built
+/// inside the task, not shared, since this is the only place the app ever
+/// needs one. Every failure — offline, rate limiting, a malformed body —
+/// collapses to `None`, the same as "opted out" or "nothing newer": the UI
+/// never distinguishes them.
+fn update_check_task() -> Task<Message> {
+    Task::perform(
+        async {
+            let client = reqwest::Client::new();
+            update::check(env!("CARGO_PKG_VERSION"), &client)
+                .await
+                .ok()
+                .flatten()
+        },
+        Message::UpdateChecked,
+    )
 }
 
 fn sleep_then_tick() -> Task<Message> {
@@ -1287,6 +1353,7 @@ mod tests {
             start_minimized: false,
             notify_state: NotifyState::default(),
             system_theme: iced::theme::Mode::None,
+            available_update: None,
         }
     }
 
@@ -1516,5 +1583,28 @@ mod tests {
             ThemeMode::Light,
         )));
         assert!(!app.palette().dark);
+    }
+
+    /// Plan 064 Task 2: `App::boot` only schedules the GitHub check when
+    /// `check_updates` is on. The default `UiSettings` is opted out.
+    #[test]
+    fn wants_update_check_follows_only_the_persisted_flag() {
+        let mut ui = UiSettings::default();
+        assert!(
+            !wants_update_check(&ui),
+            "the default settings must be opted out"
+        );
+
+        ui.check_updates = true;
+        assert!(
+            wants_update_check(&ui),
+            "turning the setting on must schedule the check"
+        );
+
+        ui.check_updates = false;
+        assert!(
+            !wants_update_check(&ui),
+            "turning it back off must not schedule the check"
+        );
     }
 }

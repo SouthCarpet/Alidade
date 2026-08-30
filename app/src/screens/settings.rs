@@ -116,6 +116,11 @@ pub struct Threshold {
 pub struct UiSettings {
     pub theme: ThemeMode,
     pub autostart: bool,
+    /// Opt-in, default off (plan 064): one unauthenticated GitHub check on
+    /// boot when true. An old `ui-settings.toml` with no `check_updates`
+    /// key falls through `parse`'s default-then-overwrite loop, so it loads
+    /// as `false` the same way a real `#[serde(default)]` would.
+    pub check_updates: bool,
     pub notify_master: bool,
     pub notify_ping_ms: Threshold,
     pub notify_download_mbit: Threshold,
@@ -127,6 +132,7 @@ impl Default for UiSettings {
         UiSettings {
             theme: ThemeMode::System,
             autostart: false,
+            check_updates: false,
             notify_master: false,
             notify_ping_ms: Threshold {
                 enabled: false,
@@ -186,6 +192,7 @@ impl UiSettings {
                     }
                 }
                 "autostart" => out.autostart = parse_bool(value)?,
+                "check_updates" => out.check_updates = parse_bool(value)?,
                 "notify_master" => out.notify_master = parse_bool(value)?,
                 "notify_ping_enabled" => out.notify_ping_ms.enabled = parse_bool(value)?,
                 "notify_ping_ms" => out.notify_ping_ms.value = parse_f64(value)?,
@@ -201,13 +208,14 @@ impl UiSettings {
 
     fn to_toml(&self) -> String {
         format!(
-            "theme = \"{}\"\nautostart = {}\nnotify_master = {}\nnotify_ping_enabled = {}\nnotify_ping_ms = {}\nnotify_download_enabled = {}\nnotify_download_mbit = {}\nnotify_loss_enabled = {}\nnotify_loss_pct = {}\n",
+            "theme = \"{}\"\nautostart = {}\ncheck_updates = {}\nnotify_master = {}\nnotify_ping_enabled = {}\nnotify_ping_ms = {}\nnotify_download_enabled = {}\nnotify_download_mbit = {}\nnotify_loss_enabled = {}\nnotify_loss_pct = {}\n",
             match self.theme {
                 ThemeMode::System => "system",
                 ThemeMode::Light => "light",
                 ThemeMode::Dark => "dark",
             },
             self.autostart,
+            self.check_updates,
             self.notify_master,
             self.notify_ping_ms.enabled,
             self.notify_ping_ms.value,
@@ -459,6 +467,7 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
         metrics_row(palette, app),
         theme_row(palette, app),
         autostart_row(palette, app),
+        check_updates_row(palette, app),
         budget_section(palette, app),
         section_title(palette, "Targets"),
         targets_table(palette, app),
@@ -572,6 +581,26 @@ fn autostart_row(palette: Palette, app: &App) -> Element<'_, Message> {
         app.ui_settings.autostart,
         |checked| Message::SettingChanged(SettingField::Autostart(checked)),
     )
+}
+
+/// Plan 064 Task 2: opt-in, default off. The helper line says exactly what
+/// the check does and does not do, so the checkbox needs no separate
+/// confirmation dialog.
+fn check_updates_row(palette: Palette, app: &App) -> Element<'_, Message> {
+    column![
+        styled_checkbox(
+            palette,
+            "Kontrolovať nové verzie pri štarte",
+            app.ui_settings.check_updates,
+            |checked| Message::SettingChanged(SettingField::CheckUpdates(checked)),
+        ),
+        note(
+            palette,
+            "Jedna požiadavka na GitHub. Nič sa nesťahuje.".to_string(),
+        ),
+    ]
+    .spacing(SPACE.s1)
+    .into()
 }
 
 fn budget_section(palette: Palette, app: &App) -> Element<'_, Message> {
@@ -968,6 +997,7 @@ pub enum SettingField {
     Metric(MetricKind, bool),
     Theme(ThemeMode),
     Autostart(bool),
+    CheckUpdates(bool),
     BudgetEnabled(bool),
     BudgetGb(String),
     NotifyMaster(bool),
@@ -1136,6 +1166,7 @@ mod tests {
         let settings = UiSettings {
             theme: ThemeMode::Dark,
             autostart: true,
+            check_updates: true,
             notify_master: true,
             notify_ping_ms: Threshold {
                 enabled: true,
@@ -1159,6 +1190,25 @@ mod tests {
         };
         assert_eq!(error, None, "round trip must parse cleanly");
         assert_eq!(parsed, settings);
+    }
+
+    /// Plan 064 Task 2: a file saved before `check_updates` existed has no
+    /// such key. It must still parse, and load as opted out.
+    #[test]
+    fn a_ui_settings_file_without_check_updates_loads_as_opted_out() {
+        let text = "theme = \"dark\"\nautostart = true\nnotify_master = false\n\
+            notify_ping_enabled = false\nnotify_ping_ms = 150\n\
+            notify_download_enabled = false\nnotify_download_mbit = 10\n\
+            notify_loss_enabled = false\nnotify_loss_pct = 5\n";
+        let parsed = UiSettings::parse(text).expect("an old file must still parse");
+        assert!(
+            !parsed.check_updates,
+            "an old file must default to opted out"
+        );
+        assert!(
+            parsed.autostart,
+            "every other field still parses as written"
+        );
     }
 
     fn scratch_dir() -> PathBuf {

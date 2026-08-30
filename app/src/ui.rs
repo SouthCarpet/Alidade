@@ -6,11 +6,12 @@
 
 use design_tokens::scale::{SPACE, TYPE};
 
-use iced::widget::{button, column, container, row, text};
-use iced::{Color, Element, Fill, Font, Length};
+use iced::widget::{button, column, container, row, space, text};
+use iced::{Center, Color, Element, Fill, Font, Length};
 
 use crate::state::{App, Message, Screen};
 use crate::theme::Palette;
+use crate::update;
 
 pub fn font_regular() -> Font {
     Font::with_name("Inter")
@@ -46,6 +47,17 @@ impl App {
             .map(|screen| tab(palette, screen, self.screen)))
         .spacing(SPACE.s6);
 
+        // Plan 064 Task 2: a quiet, right-aligned line next to the tabs when
+        // a newer release is known. Nothing renders here otherwise.
+        let header: Element<'_, Message> = match &self.available_update {
+            Some(release) => row![tabs, space::horizontal(), update_link(palette, release)]
+                .spacing(SPACE.s4)
+                .width(Fill)
+                .align_y(Center)
+                .into(),
+            None => tabs.into(),
+        };
+
         let content: Element<'_, Message> = match self.screen {
             Screen::Home => crate::screens::home::view(self, palette),
             Screen::Continuous => crate::screens::continuous::view(self, palette),
@@ -54,7 +66,7 @@ impl App {
             Screen::Settings => crate::screens::settings::view(self, palette),
         };
 
-        let body = column![tabs, content]
+        let body = column![header, content]
             .spacing(SPACE.s6)
             .width(Fill)
             .height(Fill)
@@ -103,6 +115,22 @@ fn tab(palette: Palette, screen: Screen, active: Screen) -> Element<'static, Mes
         .style(palette.btn_ghost())
         .on_press(Message::ScreenSelected(screen))
         .into()
+}
+
+/// Plan 064 Task 2: a ghost-styled link, not a call to action. Press opens
+/// the release page in the browser (`Message::OpenReleasePage`); it never
+/// downloads anything itself.
+fn update_link<'a>(palette: Palette, release: &update::Release) -> Element<'a, Message> {
+    button(
+        text(format!("Dostupná je verzia {}", release.tag))
+            .size(TYPE.xs)
+            .font(font_regular())
+            .color(palette.muted()),
+    )
+    .padding([SPACE.s1, SPACE.s2])
+    .style(palette.btn_ghost())
+    .on_press(Message::OpenReleasePage)
+    .into()
 }
 
 fn strip(color: Color, height: f32) -> Element<'static, Message> {

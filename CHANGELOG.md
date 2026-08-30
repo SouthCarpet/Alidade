@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Windows installer (per-user, no admin prompt) with desktop and Start Menu shortcuts; the uninstaller offers to delete measured data or keep it.
+- Opt-in update check: Settings can ask GitHub once at start and show a link when a newer release exists. Nothing is downloaded.
+
 ### Fixed
 
 - Copy diagnostics now labels its summary range as UTC, matching the CSV export, and four status strings no longer use em dashes.

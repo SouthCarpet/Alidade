@@ -20,6 +20,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2.0.20"
+# Opens the release page in the user's default browser (plan 064 Task 2).
+# Never downloads or installs anything itself.
+open = "5"
 
 # Tray icon, close-to-tray, threshold notifications (plan 052, Task 6):
 # Windows-only, same target-gating pattern as the engine's ICMP `windows`
