@@ -12,4 +12,4 @@
 - The tray and ICMP support are Windows-only.
 - The UI is English only.
 - Chart zoom is not implemented. Use range chips and hover.
-- The design-tokens crate is vendored. `app/vendor/crates/design-tokens` is a copy of `design/crates/design-tokens` in the ecosystem. The token JSON under `app/vendor/tokens/` is byte-identical to `design/tokens/`, but the crate source differs in formatting and has no binary or tests. Upstream crate fixes do not reach the app until the vendored copy is refreshed. Add a drift check or use a path dependency.
+- The design-tokens crate is vendored. `app/vendor/crates/design-tokens` is a copy of `design/crates/design-tokens` in the ecosystem. Closed 2026-09-20 (plan 094 item I): `design/scripts/test_vendor.py` compares every vendored file byte for byte against its source (the vendored `Cargo.toml`'s one addition, `vendor-sync.ps1`'s own marker block, is checked with a prefix match) and fails on drift, so a stale copy is caught by a gate instead of staying a silent risk. Refresh with `app/vendor/vendor-sync.ps1`; the crate's own `version` in `Cargo.toml` (0.2.0) names which schema the vendored copy carries.

@@ -79,6 +79,27 @@ pub mod apps {
     include!(concat!(env!("OUT_DIR"), "/apps_mod.rs"));
 }
 
+/// Discovery registry (item B): every app `build.rs` found under
+/// `tokens/apps/*.json`, as `(name, light, dark)`. Re-exported at the crate
+/// root so a gate writes `design_tokens::APPS` instead of listing apps by
+/// hand; adding an app JSON file adds an entry here with no code change.
+pub use apps::APPS;
+
+/// Hue-collision gate (item D): a normal (not `#[cfg(test)]`) module so
+/// `tests/gate.rs` (an integration test, linked against the compiled rlib)
+/// can call the exact function `build.rs` uses to gate the build, on
+/// in-memory data, with no file I/O and no subprocess.
+pub mod hue_gate {
+    include!("hue_gate.rs");
+}
+
+/// CSS text assembly (item C): `main.rs`'s `css` subcommand calls this at
+/// runtime with the `--prefix`/`--dark-selector` flags, over the (name,
+/// value) pairs `build.rs` baked at build time.
+pub mod css_assemble {
+    include!("css_assemble.rs");
+}
+
 /// `iced` interop (Task 4, gated so the core crate stays dependency-free by
 /// default): a straight field-for-field conversion, since both [`Rgba`] and
 /// `iced_core::Color` are straight (non-premultiplied) sRGB with an alpha

@@ -285,6 +285,42 @@ pub struct NeutralTint {
     pub chroma: f64,
 }
 
+/// Optional per-app second accent (plan 092 phase p6, Tier-2 exception):
+/// reuses the base accent_family's hover/active/soft/soft_foreground
+/// formulas verbatim at a second hue, plus a "rail" variant (border's own
+/// lightness, the soft chroma cap) for a muted, always-visible frame use.
+/// `name` becomes the CSS custom-property stem, e.g. `hextech` ->
+/// `--color-hextech`, `--color-hextech-hover`, ..., `--color-hextech-rail`.
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SecondAccent {
+    pub name: String,
+    pub hue: f64,
+}
+
+/// Optional per-app team ring pair (plan 092 phase p6): two flat colours
+/// built from the shared dataviz series_color formula (same l/c as the
+/// chart series) at caller-chosen hues, so no new hue formula is needed.
+/// Emits `--color-team-blue` and `--color-team-red`.
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TeamRings {
+    pub blue_hue: f64,
+    pub red_hue: f64,
+}
+
+/// One accepted hue collision (item D, D10): silences the build.rs hue gate
+/// for exactly this pair. `with` names a status ("danger"/"warning"/
+/// "success") or another app's kebab name; `reason` must be non-empty
+/// (build.rs enforces this — serde cannot) and names the date and the
+/// decision owner, since D10 makes every hue change Michal's call.
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedHueOverlap {
+    pub with: String,
+    pub reason: String,
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct AppTokens {
@@ -297,6 +333,12 @@ pub struct AppTokens {
     pub provisional: Option<bool>,
     #[serde(default)]
     pub mark: Option<String>,
+    #[serde(default)]
+    pub second_accent: Option<SecondAccent>,
+    #[serde(default)]
+    pub team_rings: Option<TeamRings>,
+    #[serde(default)]
+    pub accepted_hue_overlaps: Vec<AcceptedHueOverlap>,
 }
 
 pub fn parse_base(text: &str) -> Result<BaseTokens, serde_json::Error> {
@@ -310,23 +352,34 @@ pub fn parse_app(text: &str) -> Result<AppTokens, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
 
-    /// The schema gate must reject an unknown key. The fixture starts from the
-    /// shipped base tokens, but it stays entirely in memory so parallel tests
-    /// cannot race through a shared scratch path.
+    /// Step 5 of the task brief: prove the schema gate actually rejects an
+    /// invalid file, without ever touching the real tokens. Copies the real
+    /// base.json into target/tmp-bad/, injects one unknown top-level key,
+    /// and asserts `parse_base` errors (via #[should_panic] on .unwrap()).
     #[test]
-    fn rejects_an_unknown_field_in_the_shipped_base_tokens() {
-        let mut value: serde_json::Value =
-            serde_json::from_str(include_str!("../../../tokens/base.json"))
-                .expect("real base.json must itself be valid JSON");
+    #[should_panic(expected = "unknown field")]
+    fn rejects_unknown_field_in_a_copy_of_base_json() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let real_base = PathBuf::from(manifest_dir).join("../../tokens/base.json");
+        let text = fs::read_to_string(&real_base)
+            .expect("read the real base.json to build the negative-test copy from");
+
+        let mut value: serde_json::Value = serde_json::from_str(&text)
+            .expect("real base.json must itself be valid JSON");
         value["totally_unknown_field"] = serde_json::json!("this key is not in the schema");
-        let bad_text = serde_json::to_string(&value).expect("serialize the invalid fixture");
+        let bad_text = serde_json::to_string_pretty(&value).unwrap();
 
-        let error = parse_base(&bad_text).expect_err("an unknown top-level token must be rejected");
+        let bad_dir = PathBuf::from(manifest_dir).join("../../target/tmp-bad");
+        fs::create_dir_all(&bad_dir).expect("create the target/tmp-bad scratch dir");
+        let bad_path = bad_dir.join("base-bad.json");
+        fs::write(&bad_path, &bad_text).expect("write the bad copy");
 
-        assert!(
-            error.to_string().contains("unknown field"),
-            "the schema error must identify the unknown field: {error}"
-        );
+        let bad_text_read = fs::read_to_string(&bad_path).expect("read back the bad copy");
+        // The real base.json on disk is untouched — only base-bad.json
+        // under target/tmp-bad/ (gitignored) was written.
+        parse_base(&bad_text_read).unwrap();
     }
 }

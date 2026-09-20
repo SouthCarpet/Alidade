@@ -1,6 +1,10 @@
 [package]
 name = "design-tokens"
-version = "0.1.0"
+# Bump on every src/schema.rs change (item I): the vendored copy's version
+# is the only way a standalone consumer (Alidade) states which schema it
+# carries. See design/README.md, "Version". 0.2.0: accepted_hue_overlaps
+# added to AppTokens (plan 094 Task 3, item D).
+version = "0.2.0"
 edition = "2021"
 build = "build.rs"
 
@@ -34,6 +38,10 @@ iced_core = { version = "0.14.0", optional = true, default-features = false }
 [features]
 iced = ["dep:iced_core"]
 
+# Marker block name: cargo-toml-clippy-allow (design/consumers.json's
+# "marker_file" field for this app names this exact file; test_vendor.py
+# checks it with a prefix match instead of byte equality because of this
+# block).
 # The lines below are this vendored copy's one addition on top of the source
 # crate (`A:\projects-vault\design\crates\design-tokens\Cargo.toml`, not part
 # of this repo — see ../../README.md). This crate was never linted by this
