@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- CI and release workflows use Node 24 actions: `actions/checkout` v7, `actions/cache` v6, `softprops/action-gh-release` v3.
+
 ## [0.1.0] - 2026-08-30
 
 ### Added
