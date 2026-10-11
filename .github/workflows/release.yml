@@ -12,10 +12,10 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo registry and build output
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~\.cargo\registry
@@ -41,7 +41,7 @@ jobs:
           }
           $lines[($start - 1)..($end - 2)] | Set-Content RELEASE_NOTES.md
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: RELEASE_NOTES.md
           files: |
