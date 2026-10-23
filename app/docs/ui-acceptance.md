@@ -87,7 +87,7 @@ Final verdict (re-check after the fix wave):
 - **Important (closed).** History Loss values were clipped. Re-check: the complete Loss header and every `0.00` value are visible. The scrollbar sits in its own gutter.
 - **Important (closed).** Continuous showed three table rows instead of eight. Re-check: eight rounds and seven columns; the well is sized to those rows.
 - **Important (closed).** Notification thresholds were below the fold. Re-check: the extra Notifications shots show the master checkbox and the three thresholds (`Ping above 150 ms`, `Download below 10 Mbit/s`, `Loss above 5 %`).
-- **Important (closed).** Several cards lacked a milled top edge. Re-check: a fine milled top edge is visible on the Home card, both Continuous containers, both Ping target rows, the History table, and the Settings Targets table in both themes.
+- **Important (superseded by Kaliber r4).** Cards and wells now use a flat fill and a 1 px hairline. The former top highlight and card shadow are removed in both themes.
 
 The first-round verdict was also PARTIAL. The five Critical and Important items above were the reason. After the wave, only the blank danger-row sparkline remains Important.
 

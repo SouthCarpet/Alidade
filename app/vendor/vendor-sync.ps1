@@ -50,19 +50,35 @@ machine) that has $SourceRoot checked out.
 # script's own log lines call it, so both sides name the same exception.
 $MarkerName = "cargo-toml-clippy-allow"
 $Files = @(
-    @{ Source = "crates\design-tokens\Cargo.toml";        Vendor = "crates\design-tokens\Cargo.toml";        CargoToml = $true }
-    @{ Source = "crates\design-tokens\build.rs";           Vendor = "crates\design-tokens\build.rs";           CargoToml = $false }
-    @{ Source = "crates\design-tokens\src\lib.rs";         Vendor = "crates\design-tokens\src\lib.rs";         CargoToml = $false }
-    @{ Source = "crates\design-tokens\src\color.rs";       Vendor = "crates\design-tokens\src\color.rs";       CargoToml = $false }
-    @{ Source = "crates\design-tokens\src\schema.rs";      Vendor = "crates\design-tokens\src\schema.rs";      CargoToml = $false }
-    @{ Source = "crates\design-tokens\src\hue_gate.rs";    Vendor = "crates\design-tokens\src\hue_gate.rs";    CargoToml = $false }
+    @{ Source = "crates\design-tokens\Cargo.toml"; Vendor = "crates\design-tokens\Cargo.toml"; CargoToml = $true }
+    @{ Source = "crates\design-tokens\build.rs"; Vendor = "crates\design-tokens\build.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\lib.rs"; Vendor = "crates\design-tokens\src\lib.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\color.rs"; Vendor = "crates\design-tokens\src\color.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\schema.rs"; Vendor = "crates\design-tokens\src\schema.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\hue_gate.rs"; Vendor = "crates\design-tokens\src\hue_gate.rs"; CargoToml = $false }
     @{ Source = "crates\design-tokens\src\css_assemble.rs"; Vendor = "crates\design-tokens\src\css_assemble.rs"; CargoToml = $false }
-    @{ Source = "tokens\base.json";                   Vendor = "tokens\base.json";                   CargoToml = $false }
-    @{ Source = "tokens\apps\alidade.json";            Vendor = "tokens\apps\alidade.json";            CargoToml = $false }
-    @{ Source = "assets\fonts\Inter-Regular.ttf";      Vendor = "fonts\Inter-Regular.ttf";             CargoToml = $false }
-    @{ Source = "assets\fonts\Inter-Medium.ttf";       Vendor = "fonts\Inter-Medium.ttf";              CargoToml = $false }
-    @{ Source = "assets\fonts\Inter-SemiBold.ttf";     Vendor = "fonts\Inter-SemiBold.ttf";            CargoToml = $false }
-    @{ Source = "assets\fonts\OFL.txt";                Vendor = "fonts\OFL.txt";                       CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\contrast.rs"; Vendor = "crates\design-tokens\src\contrast.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\fonts.rs"; Vendor = "crates\design-tokens\src\fonts.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\styles.rs"; Vendor = "crates\design-tokens\src\styles.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\motion.rs"; Vendor = "crates\design-tokens\src\motion.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\keys.rs"; Vendor = "crates\design-tokens\src\keys.rs"; CargoToml = $false }
+    @{ Source = "tokens\base.json"; Vendor = "tokens\base.json"; CargoToml = $false }
+    @{ Source = "tokens\apps\alidade.json"; Vendor = "tokens\apps\alidade.json"; CargoToml = $false }
+    @{ Source = "assets\fonts\AtkinsonHyperlegibleNext-Variable.ttf"; Vendor = "fonts\AtkinsonHyperlegibleNext-Variable.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\OFL-AtkinsonHyperlegibleNext.txt"; Vendor = "fonts\OFL-AtkinsonHyperlegibleNext.txt"; CargoToml = $false }
+    @{ Source = "assets\fonts\Inter-Regular.ttf"; Vendor = "fonts\Inter-Regular.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\Inter-Medium.ttf"; Vendor = "fonts\Inter-Medium.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\Inter-SemiBold.ttf"; Vendor = "fonts\Inter-SemiBold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\OFL.txt"; Vendor = "fonts\OFL.txt"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSans-Regular.ttf"; Vendor = "assets\fonts\fira-sans\FiraSans-Regular.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSans-Medium.ttf"; Vendor = "assets\fonts\fira-sans\FiraSans-Medium.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSans-SemiBold.ttf"; Vendor = "assets\fonts\fira-sans\FiraSans-SemiBold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSans-Bold.ttf"; Vendor = "assets\fonts\fira-sans\FiraSans-Bold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSansTabular-Regular.ttf"; Vendor = "assets\fonts\fira-sans\FiraSansTabular-Regular.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSansTabular-Medium.ttf"; Vendor = "assets\fonts\fira-sans\FiraSansTabular-Medium.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSansTabular-SemiBold.ttf"; Vendor = "assets\fonts\fira-sans\FiraSansTabular-SemiBold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSansTabular-Bold.ttf"; Vendor = "assets\fonts\fira-sans\FiraSansTabular-Bold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\OFL.txt"; Vendor = "assets\fonts\fira-sans\OFL.txt"; CargoToml = $false }
 )
 
 # Appended to the vendored design-tokens Cargo.toml only. This crate was

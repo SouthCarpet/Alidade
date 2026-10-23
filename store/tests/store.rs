@@ -1,5 +1,5 @@
 use alidade_engine::{LoadWindow, PingSample, PingStats, RoundKind, RoundResult, Throughput};
-use alidade_store::Store;
+use alidade_store::{RoundRow, Store};
 use std::time::{Duration, SystemTime};
 
 fn round_with(
@@ -113,32 +113,26 @@ fn open_creates_schema_and_is_idempotent() {
     );
 }
 
-#[test]
-fn round_roundtrips_with_null_metrics_preserved() {
-    let dir = tempfile::tempdir().unwrap();
-    let s = Store::open(&dir.path().join("a.db")).unwrap();
-    let r = RoundResult {
+fn ping_stats(avg: f64, min: f64, max: f64, jitter: f64, loss_pct: f64) -> PingStats {
+    PingStats {
+        avg_ms: Some(avg),
+        min_ms: Some(min),
+        max_ms: Some(max),
+        jitter_ms: Some(jitter),
+        loss_pct,
+        sent: 8,
+    }
+}
+
+fn round_with_all_phases() -> RoundResult {
+    RoundResult {
         started_at: SystemTime::now(),
         kind: RoundKind::Full,
         down: Some(some_down()),
         up: None,
         ping_idle: Some(some_idle_ping()),
-        ping_down: Some(PingStats {
-            avg_ms: Some(40.0),
-            min_ms: Some(20.0),
-            max_ms: Some(80.0),
-            jitter_ms: Some(12.0),
-            loss_pct: 2.5,
-            sent: 8,
-        }),
-        ping_up: Some(PingStats {
-            avg_ms: Some(30.0),
-            min_ms: Some(15.0),
-            max_ms: Some(60.0),
-            jitter_ms: Some(8.0),
-            loss_pct: 5.0,
-            sent: 8,
-        }),
+        ping_down: Some(ping_stats(40.0, 20.0, 80.0, 12.0, 2.5)),
+        ping_up: Some(ping_stats(30.0, 15.0, 60.0, 8.0, 5.0)),
         down_load: Some(LoadWindow {
             duration: Duration::from_millis(9_800),
             ping_samples: 8,
@@ -147,40 +141,58 @@ fn round_roundtrips_with_null_metrics_preserved() {
         up_load: None,
         capped: false,
         skipped_reason: None,
-    };
-    let id = s.insert_round(&r).unwrap();
+    }
+}
+
+fn assert_bytes_and_load_window(row: &RoundRow) {
+    assert!(row.down_bps.is_some() && row.up_bps.is_none());
+    assert_eq!(row.mode, RoundKind::Full);
+    assert!(!row.capped);
+    // bytes_down reads from the load window, not from `down` — both agree
+    // here, but the two must not be coupled (see the F1 tests below).
+    assert_eq!(row.bytes_down, 1_250_000);
+    assert_eq!(row.bytes_up, 0, "no upload phase ran");
+    // The load window is what `ping_down_ms` is worth: 8 samples across 9.8 s
+    // of real load is a measurement, and the row has to be able to say so.
+    assert_eq!(row.load_down_ms, Some(9_800.0));
+    assert_eq!(row.ping_down_samples, Some(8));
+    assert_eq!(row.load_up_ms, None);
+    assert_eq!(row.ping_up_samples, None);
+}
+
+fn assert_phase_jitter_and_loss(row: &RoundRow) {
+    // Per-phase jitter/loss is the bufferbloat signal: idle vs under-load
+    // must survive storage as six distinct values, not collapse to idle.
+    assert_eq!(row.jitter_idle_ms, Some(1.5));
+    assert_eq!(row.jitter_down_ms, Some(12.0));
+    assert_eq!(row.jitter_up_ms, Some(8.0));
+    assert_eq!(row.loss_idle_pct, Some(0.0));
+    assert_eq!(row.loss_down_pct, Some(2.5));
+    assert_eq!(row.loss_up_pct, Some(5.0));
+}
+
+fn assert_phase_values_differ(row: &RoundRow) {
+    assert_ne!(row.jitter_idle_ms, row.jitter_down_ms);
+    assert_ne!(row.jitter_idle_ms, row.jitter_up_ms);
+    assert_ne!(row.jitter_down_ms, row.jitter_up_ms);
+    assert_ne!(row.loss_idle_pct, row.loss_down_pct);
+    assert_ne!(row.loss_idle_pct, row.loss_up_pct);
+    assert_ne!(row.loss_down_pct, row.loss_up_pct);
+}
+
+#[test]
+fn round_roundtrips_with_null_metrics_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(&dir.path().join("a.db")).unwrap();
+    let id = s.insert_round(&round_with_all_phases()).unwrap();
     assert!(id > 0);
     let rows = s
         .rounds_between(SystemTime::UNIX_EPOCH, SystemTime::now())
         .unwrap();
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].down_bps.is_some() && rows[0].up_bps.is_none());
-    assert_eq!(rows[0].mode, RoundKind::Full);
-    assert!(!rows[0].capped);
-    // bytes_down reads from the load window, not from `down` — both agree
-    // here, but the two must not be coupled (see the F1 tests below).
-    assert_eq!(rows[0].bytes_down, 1_250_000);
-    assert_eq!(rows[0].bytes_up, 0, "no upload phase ran");
-    // The load window is what `ping_down_ms` is worth: 8 samples across 9.8 s
-    // of real load is a measurement, and the row has to be able to say so.
-    assert_eq!(rows[0].load_down_ms, Some(9_800.0));
-    assert_eq!(rows[0].ping_down_samples, Some(8));
-    assert_eq!(rows[0].load_up_ms, None);
-    assert_eq!(rows[0].ping_up_samples, None);
-    // Per-phase jitter/loss is the bufferbloat signal: idle vs under-load
-    // must survive storage as six distinct values, not collapse to idle.
-    assert_eq!(rows[0].jitter_idle_ms, Some(1.5));
-    assert_eq!(rows[0].jitter_down_ms, Some(12.0));
-    assert_eq!(rows[0].jitter_up_ms, Some(8.0));
-    assert_eq!(rows[0].loss_idle_pct, Some(0.0));
-    assert_eq!(rows[0].loss_down_pct, Some(2.5));
-    assert_eq!(rows[0].loss_up_pct, Some(5.0));
-    assert_ne!(rows[0].jitter_idle_ms, rows[0].jitter_down_ms);
-    assert_ne!(rows[0].jitter_idle_ms, rows[0].jitter_up_ms);
-    assert_ne!(rows[0].jitter_down_ms, rows[0].jitter_up_ms);
-    assert_ne!(rows[0].loss_idle_pct, rows[0].loss_down_pct);
-    assert_ne!(rows[0].loss_idle_pct, rows[0].loss_up_pct);
-    assert_ne!(rows[0].loss_down_pct, rows[0].loss_up_pct);
+    assert_bytes_and_load_window(&rows[0]);
+    assert_phase_jitter_and_loss(&rows[0]);
+    assert_phase_values_differ(&rows[0]);
     // CSV aliases stay the idle baseline.
     assert_eq!(rows[0].jitter_ms, rows[0].jitter_idle_ms);
     assert_eq!(rows[0].loss_pct, rows[0].loss_idle_pct);
@@ -326,6 +338,17 @@ fn downsample_keeps_whole_minute_across_repeated_runs() {
     assert_eq!(row.loss_pct, 20.0);
 }
 
+const METHODOLOGY_NEEDLES: [&str; 8] = [
+    "Alidade v",
+    "wall-clock bounded to 10 seconds",
+    "speed.cloudflare.com/__down",
+    "ICMP echo to 1.1.1.1",
+    "started_at is UTC",
+    "Rows: 2",
+    "no trustworthy rate was available",
+    "load_down_ms and load_up_ms",
+];
+
 #[test]
 fn csv_export_writes_a_header_and_one_line_per_round() {
     let dir = tempfile::tempdir().unwrap();
@@ -361,26 +384,12 @@ fn csv_export_writes_a_header_and_one_line_per_round() {
         .expect("the CSV column header must follow its methodology comments");
     let methodology = &lines[..header_index];
     assert!(methodology.iter().all(|line| line.starts_with("# ")));
-    assert!(methodology.iter().any(|line| line.contains("Alidade v")));
-    assert!(methodology
-        .iter()
-        .any(|line| line.contains("wall-clock bounded to 10 seconds")));
-    assert!(methodology
-        .iter()
-        .any(|line| line.contains("speed.cloudflare.com/__down")));
-    assert!(methodology
-        .iter()
-        .any(|line| line.contains("ICMP echo to 1.1.1.1")));
-    assert!(methodology
-        .iter()
-        .any(|line| line.contains("started_at is UTC")));
-    assert!(methodology.iter().any(|line| line.contains("Rows: 2")));
-    assert!(methodology
-        .iter()
-        .any(|line| line.contains("no trustworthy rate was available")));
-    assert!(methodology
-        .iter()
-        .any(|line| line.contains("load_down_ms and load_up_ms")));
+    for needle in METHODOLOGY_NEEDLES {
+        assert!(
+            methodology.iter().any(|line| line.contains(needle)),
+            "the methodology comments lost `{needle}`"
+        );
+    }
     assert_eq!(lines.len() - header_index - 1, 2, "one data line per round");
 
     let csv_without_comments = lines[header_index..].join("\n");
@@ -390,6 +399,76 @@ fn csv_export_writes_a_header_and_one_line_per_round() {
         records.len(),
         2,
         "the uncommented CSV must round-trip its rows"
+    );
+}
+
+/// Read by column NAME, not by position or line suffix. The previous form
+/// asserted `ends_with(",false,")`, which silently encoded "capped is the
+/// second-to-last column" and broke the moment a column was appended —
+/// a test failing for a reason unrelated to what it is testing.
+struct Csv<'a> {
+    header: Vec<&'a str>,
+    header_line: &'a str,
+    data: Vec<&'a str>,
+}
+
+impl<'a> Csv<'a> {
+    fn parse(lines: &[&'a str]) -> Self {
+        let header_index = lines
+            .iter()
+            .position(|line| line.starts_with("started_at,"))
+            .unwrap();
+        Csv {
+            header: lines[header_index].split(',').collect(),
+            header_line: lines[header_index],
+            data: lines[header_index + 1..].to_vec(),
+        }
+    }
+
+    fn cell(&self, row: usize, name: &str) -> String {
+        let col = self
+            .header
+            .iter()
+            .position(|h| *h == name)
+            .unwrap_or_else(|| panic!("export lost the `{name}` column: {}", self.header_line));
+        self.data[row]
+            .split(',')
+            .nth(col)
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
+fn assert_kind_and_cap_cells(csv: &Csv) {
+    assert_eq!(csv.cell(0, "mode"), "full");
+    assert_eq!(csv.cell(0, "capped"), "false");
+    assert_eq!(
+        csv.cell(1, "capped"),
+        "true",
+        "the capped round must be exported as capped: {}",
+        csv.data[1]
+    );
+}
+
+fn assert_load_window_cell(csv: &Csv) {
+    assert_eq!(
+        csv.cell(3, "load_down_ms"),
+        "1207",
+        "a speed with no window beside it cannot be judged - 207 Mbit/s over 1.2s and over 10s          are different claims, and the CSV must let a reader tell them apart even when the rate          itself was discarded: {}",
+        csv.data[3]
+    );
+}
+
+fn assert_ping_and_rate_limited_lines(csv: &Csv) {
+    assert!(
+        csv.data[2].contains(",ping,"),
+        "a ping-only round must not read as a full round with a blank download: {}",
+        csv.data[2]
+    );
+    assert!(
+        csv.data[3].contains(",full,,18.56,") && csv.data[3].contains("rate-limiting"),
+        "a rate-limited round must stay `full` with an empty down_mbps and the reason          visible, not a blank cell that could mean anything: {}",
+        csv.data[3]
     );
 }
 
@@ -460,56 +539,10 @@ fn the_csv_says_which_kind_of_round_each_row_is_and_whether_it_was_capped() {
     let text = std::fs::read_to_string(&out).unwrap();
     let lines: Vec<&str> = text.lines().collect();
 
-    // Read by column NAME, not by position or line suffix. The previous form
-    // asserted `ends_with(",false,")`, which silently encoded "capped is the
-    // second-to-last column" and broke the moment a column was appended —
-    // a test failing for a reason unrelated to what it is testing.
-    let header_index = lines
-        .iter()
-        .position(|line| line.starts_with("started_at,"))
-        .unwrap();
-    let header: Vec<&str> = lines[header_index].split(',').collect();
-    let col = |name: &str| {
-        header
-            .iter()
-            .position(|h| *h == name)
-            .unwrap_or_else(|| panic!("export lost the `{name}` column: {}", lines[header_index]))
-    };
-    let cell = |line: &str, name: &str| -> String {
-        line.split(',')
-            .nth(col(name))
-            .unwrap_or_default()
-            .to_string()
-    };
-
-    assert_eq!(cell(lines[header_index + 1], "mode"), "full");
-    assert_eq!(cell(lines[header_index + 1], "capped"), "false");
-    assert_eq!(
-        cell(lines[header_index + 2], "capped"),
-        "true",
-        "the capped round must be exported as capped: {}",
-        lines[header_index + 2]
-    );
-    assert_eq!(
-        cell(lines[header_index + 4], "load_down_ms"),
-        "1207",
-        "a speed with no window beside it cannot be judged - 207 Mbit/s over 1.2s and over 10s \
-         are different claims, and the CSV must let a reader tell them apart even when the rate \
-         itself was discarded: {}",
-        lines[header_index + 4]
-    );
-    assert!(
-        lines[header_index + 3].contains(",ping,"),
-        "a ping-only round must not read as a full round with a blank download: {}",
-        lines[header_index + 3]
-    );
-    assert!(
-        lines[header_index + 4].contains(",full,,18.56,")
-            && lines[header_index + 4].contains("rate-limiting"),
-        "a rate-limited round must stay `full` with an empty down_mbps and the reason \
-         visible, not a blank cell that could mean anything: {}",
-        lines[header_index + 4]
-    );
+    let csv = Csv::parse(&lines);
+    assert_kind_and_cap_cells(&csv);
+    assert_load_window_cell(&csv);
+    assert_ping_and_rate_limited_lines(&csv);
 
     let rows = s
         .rounds_between(SystemTime::UNIX_EPOCH, SystemTime::now())

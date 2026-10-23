@@ -3,8 +3,24 @@ name = "design-tokens"
 # Bump on every src/schema.rs change (item I): the vendored copy's version
 # is the only way a standalone consumer (Alidade) states which schema it
 # carries. See design/README.md, "Version". 0.2.0: accepted_hue_overlaps
-# added to AppTokens (plan 094 Task 3, item D).
-version = "0.2.0"
+# added to AppTokens (plan 094 Task 3, item D). 0.3.0: overrides added to
+# AppTokens (plan 098, item C1). 0.4.0: direction A (plan 094 revision 2):
+# neutral_tint optional, dataviz.ramp replaces the anchor rule (series_order
+# removed), accent_family.selected, soft_active.l_delta, type.body, neutrals
+# surface-hover/border-strong/control added and border-top/milled removed,
+# tracking, motion.stagger_step/press and the shadow geometry removed.
+# 0.5.0: the motion layer (plan 094 revision 2, lane K2): motion.slow,
+# ease_loop, offset_press, offset_enter, offset_focus and scale_enter added.
+# 0.6.0: the control set (lane K4, spec R9): motion.scale_mark added.
+# 0.7.0: the gap controls (lane K5): motion.tooltip_delay added.
+# 0.8.0: the register motion set (lane K6, spec R17 and R18): motion.ink_hold
+# and motion.ink_cap_per_second added, and the `motion` module (iced feature).
+# 0.9.0: the `keys` module (iced feature, lane K9): keyboard rules.
+# 0.10.0: Kaliber r4 (plan 125): neutrals surface-active and disabled-text,
+# accent_family.ink, space 12, type read/display steps, motion sequence_*,
+# AppTokens.accent2_hue with the Accent2 tones, the `contrast` module and
+# CLI subcommand, and the `fonts` module (iced feature, Fira Sans).
+version = "0.10.0"
 edition = "2021"
 build = "build.rs"
 
@@ -34,9 +50,20 @@ serde_json = "1"
 # `iced_core::Color`, so `From<Rgba> for iced_core::Color` satisfies
 # `From<Rgba> for iced::Color` for any consumer on the same iced 0.14 line.
 iced_core = { version = "0.14.0", optional = true, default-features = false }
+# `iced_widget` (plan 094 Task 11, item J): `styles.rs` builds real
+# `button::Style`/`container::Style`/`text_input::Style` values, and those
+# types live in `iced_widget`, not `iced_core`. Any real iced consumer of
+# this feature (gallery-iced, Alidade) already depends on the full `iced`
+# facade, which re-exports `iced_widget`'s renderer backend anyway, so this
+# adds no new backend to the dependency graph, only the one already
+# required -- Cargo unifies both to the same 0.14.2 resolution inside this
+# workspace. `iced::widget::button::Style` is a direct re-export of
+# `iced_widget::button::Style`, so values built here satisfy the facade's
+# type on the same iced 0.14 line.
+iced_widget = { version = "0.14.0", optional = true, default-features = false }
 
 [features]
-iced = ["dep:iced_core"]
+iced = ["dep:iced_core", "dep:iced_widget"]
 
 # Marker block name: cargo-toml-clippy-allow (design/consumers.json's
 # "marker_file" field for this app names this exact file; test_vendor.py

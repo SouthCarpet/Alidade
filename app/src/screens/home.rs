@@ -183,10 +183,7 @@ fn empty_state<'a>(palette: Palette) -> Element<'a, Message> {
     .align_x(Center)
     .width(Fill);
 
-    // F5 (Task 7 fix wave): the empty state is the only primary surface
-    // visible on a fresh Home screen, so it needs the milled top edge too —
-    // the same helper the KPI tiles use once a round exists.
-    palette.card(true, container(body).width(Fill).padding(SPACE.s6))
+    palette.card(container(body).width(Fill).padding(SPACE.s6))
 }
 
 // ---------------------------------------------------------------------
@@ -267,10 +264,7 @@ fn kpi_tile<'a>(
         meta.map(|(min, max, current)| gauge_fraction(min, max, current)),
     );
 
-    palette.card(
-        true,
-        column![label_text, value_row, gauge].spacing(SPACE.s2),
-    )
+    palette.card(column![label_text, value_row, gauge].spacing(SPACE.s2))
 }
 
 const GAUGE_H: f32 = 9.0;

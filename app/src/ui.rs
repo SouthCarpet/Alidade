@@ -14,24 +14,20 @@ use crate::theme::Palette;
 use crate::update;
 
 pub fn font_regular() -> Font {
-    Font::with_name("Inter")
+    Font::with_name("Fira Sans")
 }
 
 pub fn font_medium() -> Font {
     Font {
         weight: iced::font::Weight::Medium,
-        ..Font::with_name("Inter")
+        ..Font::with_name("Fira Sans")
     }
 }
 
-/// Tabular-numeral fallback (same Tier-2 gap as the gallery's own
-/// `font_numeric`, see `design/gallery-iced/src/main.rs`'s module doc):
-/// `iced_core::Text` has no OpenType feature switch, so there is no way to
-/// ask cosmic-text for `tnum`/`lnum` on Inter. A monospace digit run is
-/// tabular by construction, so every KPI/table digit run uses this instead
-/// of `font_regular`/`font_medium` — never the label next to it.
+/// The vendored number face has tabular figures and a plain zero.
+/// iced cannot select OpenType features on an individual text run.
 pub fn font_numeric() -> Font {
-    Font::MONOSPACE
+    Font::with_name("Fira Sans Tabular")
 }
 
 impl App {

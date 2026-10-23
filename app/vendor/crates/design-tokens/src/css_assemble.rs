@@ -26,11 +26,25 @@ pub fn assemble_stylesheet(
     prefix: &str,
     dark_selector: &str,
 ) -> String {
+    assemble_stylesheet_scoped(light_pairs, dark_pairs, prefix, ":root", dark_selector)
+}
+
+/// Same as [`assemble_stylesheet`] with a named light-block selector instead
+/// of `:root`. A gallery section that needs one app's tokens next to the
+/// page's own (`gallery-web/pdf-editor-scoped.css`) renders its stylesheet
+/// through this, so the scoped file is generated, not text-substituted.
+pub fn assemble_stylesheet_scoped(
+    light_pairs: &[(&str, &str)],
+    dark_pairs: &[(&str, &str)],
+    prefix: &str,
+    root_selector: &str,
+    dark_selector: &str,
+) -> String {
     let mut root = String::from("  color-scheme: light;\n");
     push_declarations(&mut root, light_pairs, prefix);
 
     let mut dark_block = String::from("  color-scheme: dark;\n");
     push_declarations(&mut dark_block, dark_pairs, prefix);
 
-    format!(":root {{\n{root}}}\n{dark_selector} {{\n{dark_block}}}\n")
+    format!("{root_selector} {{\n{root}}}\n{dark_selector} {{\n{dark_block}}}\n")
 }

@@ -49,7 +49,7 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
     }
     sections.push(actions(palette, app));
     sections.push(range_chips(palette, app.time_range));
-    sections.push(palette.card(true, container(chart).width(Fill)));
+    sections.push(palette.card(container(chart).width(Fill)));
     sections.push(rounds_table(palette, &table));
     let body = column(sections).spacing(SPACE.s4).width(Fill);
 

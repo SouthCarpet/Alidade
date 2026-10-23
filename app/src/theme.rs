@@ -18,11 +18,11 @@
 use std::time::Duration;
 
 use design_tokens::apps::alidade::{DARK, LIGHT};
-use design_tokens::scale::{MOTION, RADIUS, SHADOW_RAISE_DARK, SHADOW_RAISE_LIGHT, SPACE};
+use design_tokens::scale::{MOTION, RADIUS, SPACE};
 use design_tokens::Theme as TokenTheme;
 
-use iced::widget::{button, container, space, text_input};
-use iced::{Background, Border, Color, Element, Length, Shadow, Vector};
+use iced::widget::{button, container, text_input};
+use iced::{Background, Border, Color, Element, Length, Shadow};
 
 fn col(c: design_tokens::Rgba) -> Color {
     c.into()
@@ -32,10 +32,7 @@ fn radius(px: f32) -> iced::border::Radius {
     iced::border::radius(px)
 }
 
-/// The active theme (light or dark) plus which mode it renders. `dark`
-/// picks the milled-edge top-strip colour in [`Palette::card`]
-/// (`border_top` in light, `milled` in dark) — the same role `Ctx::dark`
-/// plays in the gallery.
+/// The active light or dark token palette.
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub theme: &'static TokenTheme,
@@ -99,49 +96,16 @@ impl Palette {
         Duration::from_millis(MOTION.live.round().max(1.0) as u64)
     }
 
-    /// Recessed data well: lightness only, no inset shadow. `milled`
-    /// prepends the same 2px top strip [`Palette::card`] uses
-    /// (`rule_design_language.md` signature (a)) inside the same
-    /// padded/bordered container, for well-style table containers that need
-    /// the milled signature too (F5, plan 052 Task 7 fix wave: History,
-    /// Continuous and the Settings targets table were missing it — a toast
-    /// stays unmilled, it is neither a card nor a table).
+    /// Recessed data well with a 1 px hairline and no shadow.
     pub fn well_frame<'a, Message: 'a>(
         &self,
-        milled: bool,
         content: impl Into<Element<'a, Message>>,
     ) -> Element<'a, Message> {
         let t = *self.theme;
-        let border = self.border();
-        let well = self.well();
-        let content = content.into();
-        let inner: Element<'a, Message> = if milled {
-            let strip_color = if self.dark {
-                col(t.milled)
-            } else {
-                col(t.border_top)
-            };
-            let strip: Element<'a, Message> =
-                container(space::horizontal().height(Length::Fixed(2.0)))
-                    .width(Length::Fill)
-                    .style(move |_| container::Style::default().background(strip_color))
-                    .into();
-            iced::widget::column![strip, content]
-                .spacing(SPACE.s3)
-                .into()
-        } else {
-            content
-        };
-        container(inner)
+        container(content)
             .padding(SPACE.s3)
             .width(Length::Fill)
-            .style(move |_| {
-                container::Style::default().background(well).border(Border {
-                    color: border,
-                    width: 1.0,
-                    radius: radius(RADIUS.md),
-                })
-            })
+            .style(move |_| design_tokens::styles::well_container(&t))
             .into()
     }
 
@@ -158,7 +122,7 @@ impl Palette {
             let (border_color, border_width) = match status {
                 text_input::Status::Focused { .. } => (col(t.focus), 2.0),
                 text_input::Status::Disabled => (col(t.disabled_fill), 1.0),
-                text_input::Status::Hovered | text_input::Status::Active => (col(t.border), 1.0),
+                text_input::Status::Hovered | text_input::Status::Active => (col(t.control), 1.0),
             };
             text_input::Style {
                 background: Background::Color(col(t.surface_raised)),
@@ -220,62 +184,16 @@ impl Palette {
             .into()
     }
 
-    /// The Kaliber raised card: `surface_raised` background, `shadow-raise`,
-    /// 1px `border`. When `milled` is true, a 2px top strip is prepended
-    /// inside the same padded/bordered/shadowed container —
-    /// `border_top` in light (the real per-side override colour), `milled`
-    /// in dark (canon's "+0.04 inner highlight", alpha-blended live by the
-    /// renderer against `surface_raised`) — identical geometry and colour
-    /// rule to the gallery's `milled()` (see its doc comment for the
-    /// per-side-border trade-off `iced_core::Border` forces).
+    /// Raised pane with a tone step and a 1 px hairline.
     pub fn card<'a, Message: 'a>(
         &self,
-        milled: bool,
         content: impl Into<Element<'a, Message>>,
     ) -> Element<'a, Message> {
         let t = *self.theme;
-        let shadow = if self.dark {
-            SHADOW_RAISE_DARK
-        } else {
-            SHADOW_RAISE_LIGHT
-        };
-        let content = content.into();
-
-        let inner: Element<'a, Message> = if milled {
-            let strip_color = if self.dark {
-                col(t.milled)
-            } else {
-                col(t.border_top)
-            };
-            let strip: Element<'a, Message> =
-                container(space::horizontal().height(Length::Fixed(2.0)))
-                    .width(Length::Fill)
-                    .style(move |_| container::Style::default().background(strip_color))
-                    .into();
-            iced::widget::column![strip, content]
-                .spacing(SPACE.s3)
-                .into()
-        } else {
-            content
-        };
-
-        container(inner)
+        container(content)
             .padding(SPACE.s4)
             .width(Length::Fill)
-            .style(move |_| {
-                container::Style::default()
-                    .background(col(t.surface_raised))
-                    .border(Border {
-                        color: col(t.border),
-                        width: 1.0,
-                        radius: radius(RADIUS.lg),
-                    })
-                    .shadow(Shadow {
-                        color: col(shadow.color),
-                        offset: Vector::new(shadow.x, shadow.y),
-                        blur_radius: shadow.blur,
-                    })
-            })
+            .style(move |_| design_tokens::styles::card_container(&t))
             .into()
     }
 
@@ -306,9 +224,9 @@ impl Palette {
         let t = *self.theme;
         move |_theme, status| {
             let (background, border_color, text_color) = match status {
-                button::Status::Active => (col(t.surface_raised), col(t.border), col(t.text)),
-                button::Status::Hovered => (col(t.surface_hover), col(t.border), col(t.text)),
-                button::Status::Pressed => (col(t.well), col(t.border), col(t.text)),
+                button::Status::Active => (col(t.surface_raised), col(t.control), col(t.text)),
+                button::Status::Hovered => (col(t.surface_hover), col(t.control), col(t.text)),
+                button::Status::Pressed => (col(t.well), col(t.control), col(t.text)),
                 button::Status::Disabled => (
                     col(t.disabled_fill),
                     col(t.disabled_fill),

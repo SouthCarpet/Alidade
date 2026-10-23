@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Use Fira Sans for text and Fira Sans Tabular for metric numbers and chart labels, with a plain zero.
+
+- Refresh design tokens to 0.10.0. Raised panes and wells use flat fills and 1 px hairlines. Remove the top highlight strips and card shadows.
+
+- Size the chart side margins from the widest axis label, so a label of three or four digits shows in full.
+
+- Set the Rust cognitive complexity limit to 12 (`clippy.toml`). Three store tests and the startup flag parser were split into helpers to meet it. No assertion or flag behaviour changed.
+
 ## [0.1.0] - 2026-08-30
 
 ### Added

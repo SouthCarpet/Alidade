@@ -174,7 +174,6 @@ pub(crate) fn toast_view<'a>(palette: Palette, toast: &Toast) -> Element<'a, Mes
         .style(palette.btn_ghost())
         .on_press(Message::DismissToast);
     palette.well_frame(
-        false,
         row![
             dot,
             text(toast.message.clone())
@@ -288,7 +287,6 @@ pub(crate) fn rounds_table<'a>(palette: Palette, rows: &[RoundRow]) -> Element<'
     // columns never sit under it.
     let gutter = scrollable::Scrollbar::new().spacing(SPACE.s2);
     palette.well_frame(
-        true,
         scrollable(column(body).spacing(SPACE.s2).width(Fill))
             .height(Length::Fixed(height))
             .direction(scrollable::Direction::Vertical(gutter)),

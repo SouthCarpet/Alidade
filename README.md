@@ -32,6 +32,10 @@ Settings are plain, user-editable TOML. The default throughput source is Cloudfl
 
 See [INSTALL.md](INSTALL.md), [CHANGELOG.md](CHANGELOG.md), and [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
+## Desktop appearance
+
+The desktop app uses vendored Kaliber design tokens 0.10.0, with light and dark palettes. Raised panes use a tone step and a 1 px hairline. Text uses Fira Sans; metric numbers and chart labels use Fira Sans Tabular, with equal-width figures and a plain zero.
+
 ## Licence
 
 Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

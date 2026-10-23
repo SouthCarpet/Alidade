@@ -661,7 +661,7 @@ fn targets_table(palette: Palette, app: &App) -> Element<'_, Message> {
     for (index, target) in app.settings.targets.iter().enumerate() {
         rows.push(target_row(palette, app, index, target));
     }
-    palette.well_frame(true, column(rows).spacing(SPACE.s3).width(Fill))
+    palette.well_frame(column(rows).spacing(SPACE.s3).width(Fill))
 }
 
 fn header_cell<'a>(palette: Palette, label: &'static str, portion: u16) -> Element<'a, Message> {

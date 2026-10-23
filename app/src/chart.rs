@@ -7,11 +7,11 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alidade_store::RoundRow;
-use design_tokens::scale::{RADIUS, SHADOW_RAISE_DARK, SHADOW_RAISE_LIGHT, SPACE, TYPE};
+use design_tokens::scale::{RADIUS, SPACE, TYPE};
 use iced::alignment;
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Frame, Geometry, LineDash, Path, Stroke, Text};
-use iced::{Color, Font, Point as CanvasPoint, Rectangle, Renderer, Size};
+use iced::{Color, Point as CanvasPoint, Rectangle, Renderer, Size};
 
 use crate::theme::Palette;
 
@@ -151,6 +151,39 @@ impl LineChart {
             palette,
         }
     }
+
+    fn throughput_values(&self) -> Vec<f64> {
+        self.points
+            .iter()
+            .flat_map(|point| [point.download_mbit, point.upload_mbit])
+            .flatten()
+            .collect()
+    }
+
+    fn latency_values(&self) -> Vec<f64> {
+        self.points
+            .iter()
+            .flat_map(|point| {
+                [
+                    point.ping_idle_ms,
+                    point.ping_load_ms,
+                    point.jitter_ms,
+                    point.loss_pct,
+                ]
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// The plot area for a canvas of `size`, with side margins that fit the
+    /// widest axis label of each scale.
+    fn plot(&self, size: Size) -> Plot {
+        plot_area(
+            size,
+            y_scale(&self.throughput_values(), false),
+            y_scale(&self.latency_values(), true),
+        )
+    }
 }
 
 #[derive(Debug, Default)]
@@ -192,7 +225,7 @@ impl<Message> canvas::Program<Message> for LineChart {
             return None;
         }
 
-        let plot = plot_area(bounds.size());
+        let plot = self.plot(bounds.size());
         let hovered = cursor.position_in(bounds).and_then(|position| {
             if plot.rectangle().contains(position) {
                 nearest_point(&self.points, plot, position.x)
@@ -217,27 +250,10 @@ impl<Message> canvas::Program<Message> for LineChart {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let plot = plot_area(frame.size());
+        let plot = self.plot(frame.size());
         let theme = *self.palette.theme;
-        let throughput = self
-            .points
-            .iter()
-            .flat_map(|point| [point.download_mbit, point.upload_mbit])
-            .flatten()
-            .collect::<Vec<_>>();
-        let latency = self
-            .points
-            .iter()
-            .flat_map(|point| {
-                [
-                    point.ping_idle_ms,
-                    point.ping_load_ms,
-                    point.jitter_ms,
-                    point.loss_pct,
-                ]
-            })
-            .flatten()
-            .collect::<Vec<_>>();
+        let throughput = self.throughput_values();
+        let latency = self.latency_values();
         let throughput_scale = y_scale(&throughput, false);
         let latency_scale = y_scale(&latency, true);
 
@@ -344,7 +360,7 @@ impl<Message> canvas::Program<Message> for LineChart {
     ) -> mouse::Interaction {
         if cursor
             .position_in(bounds)
-            .is_some_and(|position| plot_area(bounds.size()).rectangle().contains(position))
+            .is_some_and(|position| self.plot(bounds.size()).rectangle().contains(position))
         {
             mouse::Interaction::Crosshair
         } else {
@@ -353,10 +369,33 @@ impl<Message> canvas::Program<Message> for LineChart {
     }
 }
 
-fn plot_area(size: Size) -> Plot {
-    let x = SPACE.s6;
+/// Text width is estimated at 0.62 em per digit. The numeric face is
+/// tabular, so one estimate per character holds for every digit.
+const LABEL_EM_PER_CHAR: f32 = 0.62;
+
+fn axis_label(value: f64) -> String {
+    format!("{value:.0}")
+}
+
+/// The widest of the five tick labels of `scale`, in characters.
+fn widest_label_chars(scale: (f64, f64)) -> usize {
+    (0..=4)
+        .map(|step| axis_label(scale.0 + (scale.1 - scale.0) * (f64::from(step) / 4.0)))
+        .map(|label| label.chars().count())
+        .max()
+        .unwrap_or(1)
+}
+
+/// Side margin that holds the widest label of `scale` beside the plot well.
+fn label_margin(scale: (f64, f64)) -> f32 {
+    let text = widest_label_chars(scale) as f32 * TYPE.xs * LABEL_EM_PER_CHAR;
+    (text + SPACE.s2 + SPACE.s1).max(SPACE.s6)
+}
+
+fn plot_area(size: Size, left: (f64, f64), right: (f64, f64)) -> Plot {
+    let x = label_margin(left);
     let y = SPACE.s4;
-    let width = (size.width - (SPACE.s6 * 2.0)).max(0.0);
+    let width = (size.width - x - label_margin(right)).max(0.0);
     let height = (size.height - (SPACE.s4 + SPACE.s6)).max(0.0);
     Plot {
         x,
@@ -393,7 +432,7 @@ fn draw_axes(
         let right_value = right.0 + ((right.1 - right.0) * fraction);
         draw_text(
             frame,
-            format!("{left_value:.0}"),
+            axis_label(left_value),
             CanvasPoint::new(plot.x - SPACE.s2, y),
             color,
             TYPE.xs,
@@ -401,7 +440,7 @@ fn draw_axes(
         );
         draw_text(
             frame,
-            format!("{right_value:.0}"),
+            axis_label(right_value),
             CanvasPoint::new(plot.x + plot.width + SPACE.s2, y),
             color,
             TYPE.xs,
@@ -543,22 +582,11 @@ fn draw_hover(
     };
     let card_y = (plot.y + SPACE.s3).min(plot.y + plot.height - card_height);
     let radius = iced::border::radius(RADIUS.md);
-    let shadow = if palette.dark {
-        SHADOW_RAISE_DARK
-    } else {
-        SHADOW_RAISE_LIGHT
-    };
     let card = Path::rounded_rectangle(
         CanvasPoint::new(card_x, card_y),
         Size::new(card_width, card_height),
         radius,
     );
-    let shadow_path = Path::rounded_rectangle(
-        CanvasPoint::new(card_x + shadow.x, card_y + shadow.y),
-        Size::new(card_width, card_height),
-        radius,
-    );
-    frame.fill(&shadow_path, iced::Color::from(shadow.color));
     frame.fill(&card, palette.raised());
     frame.stroke(
         &card,
@@ -609,7 +637,7 @@ fn draw_text(
         position,
         color,
         size: size.into(),
-        font: Font::MONOSPACE,
+        font: crate::ui::font_numeric(),
         align_x: align_x.into(),
         align_y: alignment::Vertical::Center,
         ..Text::default()
@@ -681,4 +709,38 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     (year + i64::from(month <= 2), month as u32, day as u32)
+}
+
+#[cfg(test)]
+mod axis_margin_tests {
+    use super::*;
+
+    #[test]
+    fn the_left_margin_grows_with_the_widest_label() {
+        let three = label_margin((0.0, 109.0));
+        let four = label_margin((0.0, 1_090.0));
+        assert!(
+            four > three,
+            "a four-digit label needs more room than three"
+        );
+        assert!(three >= SPACE.s6, "the margin never drops below the base");
+    }
+
+    #[test]
+    fn the_widest_label_counts_a_minus_sign() {
+        assert_eq!(widest_label_chars((-5.0, 95.0)), 2);
+        assert_eq!(widest_label_chars((-15.0, 95.0)), 3);
+    }
+
+    #[test]
+    fn the_plot_keeps_room_for_a_four_digit_top_label() {
+        let size = Size::new(800.0, 400.0);
+        let plot = plot_area(size, (0.0, 1_090.0), (0.0, 120.0));
+        let label_width = 4.0 * TYPE.xs * LABEL_EM_PER_CHAR;
+        assert!(
+            plot.x >= label_width + SPACE.s2,
+            "left labels fit left of the well"
+        );
+        assert!(plot.width > 0.0 && plot.x + plot.width <= size.width);
+    }
 }

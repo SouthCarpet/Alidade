@@ -1,10 +1,10 @@
 // Hue-collision gate (item D, narrowed by thesis check F4): pure functions
 // shared between build.rs (the real gate, panics the build) and
-// tests/gate.rs (exercises the same logic on in-memory data — no file I/O,
+// tests/gate.rs (exercises the same logic on in-memory data, no file I/O,
 // no subprocess, so a test genuinely proves what the build would do).
 // Self-contained (no `crate::` imports), included verbatim into both
 // build.rs and `lib.rs`'s public `hue_gate` module, exactly like
-// `color.rs` and `schema.rs` are shared — one implementation, no drift.
+// `color.rs` and `schema.rs` are shared: one implementation, no drift.
 
 /// One app's accent hue plus whichever `accepted_hue_overlaps` entries its
 /// token file carries, as `(with, reason)` pairs. `with` names a status
@@ -15,8 +15,7 @@ pub struct AppHue {
     pub accepted: Vec<(String, String)>,
 }
 
-/// Circular hue distance in degrees, 0-180 (same formula as build.rs's
-/// dataviz slot rule).
+/// Circular hue distance in degrees, 0-180.
 pub fn circular_diff(a: f64, b: f64) -> f64 {
     let d = (a - b).abs() % 360.0;
     if d > 180.0 {
@@ -33,7 +32,7 @@ fn accepted_for(app: &AppHue, with: &str) -> bool {
 /// Checks every accepted_hue_overlaps reason is non-empty, every app's
 /// accent hue against the three status hues (collision at or under
 /// `accent_exclusion_deg`), and every app pair's accent hues (collision
-/// strictly under `app_to_app_deg` — D10/F4 narrows this from the full
+/// strictly under `app_to_app_deg`, D10/F4 narrows this from the full
 /// `accent_exclusion_deg`; `gallery-proof` is excluded from this half of
 /// the check, it is a proof sandbox, not a shipped identity). An
 /// `accepted_hue_overlaps` entry on either side of a pair silences that
@@ -96,15 +95,13 @@ pub fn check_hue_collisions(
     Ok(())
 }
 
-/// The `design-tokens hues` table: every app accent, every status hue, the
-/// dataviz anchors, and every pairwise distance (app-to-app distances are
-/// always reported here even when accepted or above threshold — Michal
-/// reads this before picking a new app's hue).
+/// The `design-tokens hues` table: every app accent, every status hue, and
+/// every pairwise distance (app-to-app distances are always reported here
+/// even when accepted or above threshold; Michal reads this before picking
+/// a new app's hue).
 pub fn render_hues_table(
     apps: &[AppHue],
     statuses: &[(&str, f64)],
-    anchor_hues: &[f64],
-    spare_hue: f64,
     accent_exclusion_deg: f64,
     app_to_app_deg: f64,
 ) -> String {
@@ -119,18 +116,21 @@ pub fn render_hues_table(
     for (name, hue) in statuses {
         out.push_str(&format!("  {name:<14} {hue:>5.1}\n"));
     }
-    out.push_str(&format!("\nDataviz anchors: {anchor_hues:?} (spare {spare_hue})\n"));
-
     out.push_str("\nApp vs status (degrees; * = at/under accent_exclusion_deg):\n");
     for app in apps {
         for &(status_name, status_hue) in statuses {
             let d = circular_diff(app.accent_hue, status_hue);
             let flag = if d <= accent_exclusion_deg { " *" } else { "" };
-            out.push_str(&format!("  {:<14} vs {:<8} {:>6.1}{flag}\n", app.name, status_name, d));
+            out.push_str(&format!(
+                "  {:<14} vs {:<8} {:>6.1}{flag}\n",
+                app.name, status_name, d
+            ));
         }
     }
 
-    out.push_str("\nApp vs app (degrees; gallery-proof excluded; * = under app-to-app threshold):\n");
+    out.push_str(
+        "\nApp vs app (degrees; gallery-proof excluded; * = under app-to-app threshold):\n",
+    );
     for i in 0..apps.len() {
         if apps[i].name == "gallery-proof" {
             continue;
@@ -141,7 +141,10 @@ pub fn render_hues_table(
             }
             let d = circular_diff(apps[i].accent_hue, apps[j].accent_hue);
             let flag = if d < app_to_app_deg { " *" } else { "" };
-            out.push_str(&format!("  {:<14} vs {:<14} {:>6.1}{flag}\n", apps[i].name, apps[j].name, d));
+            out.push_str(&format!(
+                "  {:<14} vs {:<14} {:>6.1}{flag}\n",
+                apps[i].name, apps[j].name, d
+            ));
         }
     }
 
