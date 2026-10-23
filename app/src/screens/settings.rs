@@ -485,6 +485,9 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
             .id(body_scrollable_id())
             .width(Fill)
             .height(Fill)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().spacing(SPACE.s2),
+            ))
             .into(),
     )
 }

@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Refresh design tokens to 0.10.0. Raised panes and wells use flat fills and 1 px hairlines. Remove the top highlight strips and card shadows.
 
+- Settings: the page scrollbar has its own gutter, so it no longer covers the targets table or "Add target".
+
 - Size the chart side margins from the widest axis label, so a label of three or four digits shows in full.
 
 - Set the Rust cognitive complexity limit to 12 (`clippy.toml`). Three store tests and the startup flag parser were split into helpers to meet it. No assertion or flag behaviour changed.

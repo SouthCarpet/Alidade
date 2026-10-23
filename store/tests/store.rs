@@ -454,7 +454,9 @@ fn assert_load_window_cell(csv: &Csv) {
     assert_eq!(
         csv.cell(3, "load_down_ms"),
         "1207",
-        "a speed with no window beside it cannot be judged - 207 Mbit/s over 1.2s and over 10s          are different claims, and the CSV must let a reader tell them apart even when the rate          itself was discarded: {}",
+        "a speed with no window beside it cannot be judged - 207 Mbit/s over 1.2s and over 10s \
+         are different claims, and the CSV must let a reader tell them apart even when the rate \
+         itself was discarded: {}",
         csv.data[3]
     );
 }
@@ -467,7 +469,8 @@ fn assert_ping_and_rate_limited_lines(csv: &Csv) {
     );
     assert!(
         csv.data[3].contains(",full,,18.56,") && csv.data[3].contains("rate-limiting"),
-        "a rate-limited round must stay `full` with an empty down_mbps and the reason          visible, not a blank cell that could mean anything: {}",
+        "a rate-limited round must stay `full` with an empty down_mbps and the reason \
+         visible, not a blank cell that could mean anything: {}",
         csv.data[3]
     );
 }

@@ -128,6 +128,22 @@ function Get-ExpectedBytes {
     return $Utf8NoBom.GetBytes($sourceText + $CargoTomlMarker)
 }
 
+# -Check treats CRLF and LF as equal, the same rule design/scripts/test_vendor.py
+# uses: a fresh checkout with core.autocrlf=true holds CRLF copies and must
+# report 0 drifted. The copy step stays byte-exact (-Exact), so a refresh still
+# writes the source bytes.
+function Test-SameContent {
+    param([byte[]]$Current, [byte[]]$Expected, [bool]$Exact)
+    # A NUL byte marks a binary file (fonts): compare those byte for byte.
+    if (-not $Exact -and ($Expected -notcontains 0)) {
+        $currentText = $Utf8NoBom.GetString($Current) -replace "`r`n", "`n"
+        $expectedText = $Utf8NoBom.GetString($Expected) -replace "`r`n", "`n"
+        $Current = $Utf8NoBom.GetBytes($currentText)
+        $Expected = $Utf8NoBom.GetBytes($expectedText)
+    }
+    return ($Current.Length -eq $Expected.Length) -and (-not (Compare-Object $Current $Expected -SyncWindow 0))
+}
+
 $drift = @()
 $updated = @()
 $unchanged = @()
@@ -144,7 +160,7 @@ foreach ($f in $Files) {
     $expected = Get-ExpectedBytes -SourcePath $sourcePath -IsCargoToml $f.CargoToml
     $currentExists = Test-Path -LiteralPath $vendorPath
     $current = if ($currentExists) { [System.IO.File]::ReadAllBytes($vendorPath) } else { $null }
-    $matches = $currentExists -and ($current.Length -eq $expected.Length) -and (-not (Compare-Object $current $expected -SyncWindow 0))
+    $matches = $currentExists -and (Test-SameContent -Current $current -Expected $expected -Exact (-not $Check))
 
     # The Cargo.toml entry carries the $MarkerName block on top of its
     # source, so its own label in every report below says so -- a reviewer

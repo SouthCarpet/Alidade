@@ -12,6 +12,9 @@ The explicit source and destination pairs match the Alidade vendor list in
 modules, the contrast helper, the font helper and its font assets.
 Only the Cargo.toml marker block is appended to the source copy.
 It retains the existing package lint settings for generated output.
+`-Check` treats CRLF and LF as equal, as `design/scripts/test_vendor.py` does,
+so a fresh checkout with `core.autocrlf=true` reports 0 drifted. The refresh
+step still copies the source bytes exactly.
 
 ## Bundled fonts
 
@@ -41,4 +44,7 @@ well styles and the `control` boundary. It adds no new app setting.
 - `Accent2.field`: optional second-hue section fill.
 - `Accent2.highlight`: optional second-hue cell fill.
 - `Accent2.mark`: optional second-hue comparison or category mark.
-- `cognitive-complexity-threshold`: the app root sets a limit of 12 for Clippy.
+
+## Clippy limit
+
+`cognitive-complexity-threshold`: the app root sets a limit of 12 for Clippy.
