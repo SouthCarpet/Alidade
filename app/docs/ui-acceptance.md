@@ -34,9 +34,15 @@ Settings holds the measurement interval, which metrics run, the targets table (g
 | About, checks off | Version, explicit off message, consent checkbox, disabled Check now; no request from start, opening About, or Check now. |
 | About, checks on | At most one request in flight; result and UTC time of the last check in this session; failures are shown. |
 | Remove | Bottom-right Undo toast names the target for 10 seconds. Undo or Ctrl+Z restores its index, all fields, and raw port text. A stale timer cannot close a newer undo. |
+| Help | Footer Help or F1 opens a searchable panel with idle ping, ping under load, jitter, and shortcuts. No animation; same text with reduced motion. |
+| Keyboard | Ctrl+, opens Settings. Escape closes Help and returns focus to the previous control. Help has keyboard focus and opens with Enter or Space. Tab stays in help search; Settings and Undo shortcuts do not act through the panel. |
 | Window | Default 1280 � 800, minimum 1008 � 640; the Settings body scrolls in its own gutter. |
 
-These states require light and dark captures at both window sizes. Captures and gate logs for this work are under `A:/tmp/120-p2-maker/`; they do not replace the historical screenshots below.
+This run follows the controller's capture-only limit of 2026-10-24: no Computer Use or global pointer/key input. The existing startup flags capture the header at the top of Settings and Appearance with the closed About heading at the end (`--scroll settings-notifications`). Captures use light and dark themes at 1280 x 800 and 1008 x 640. Files are `A:/tmp/120-p2-maker/shots/header-{theme}-{size}.png` and `settings-tail-{theme}-{size}.png`, where theme is light/dark and size is default/min.
+
+Expanded About with checks off or on and a last result, Undo, Help, and focus-return images are skipped. No existing setting or startup flag opens these states, and no new capture path was added. For every theme/size pair the skipped names are `about-off-{theme}-{size}.png`, `about-on-{theme}-{size}.png`, `undo-{theme}-{size}.png`, `help-{theme}-{size}.png`, and `focus-return-{theme}-{size}.png`.
+
+Unit evidence for these states is in `app/tests/support/t21.rs` (consent and last result), `t22.rs` (complete target restoration, expiry and Ctrl+Z), `t23.rs` (help, shortcuts, focus capture and panel state), and `screens/help.rs` (the focus operation restores the recorded control without widget IDs). These tests check the same state transitions for reduced motion because the toast and panel have no animation state. Logs are under `A:/tmp/120-p2-maker/`. The screenshots below are historical captures.
 
 ## Screenshots
 

@@ -1,7 +1,7 @@
 //! Opt-in update check against GitHub Releases.
 //!
-//! One unauthenticated GET, run only when the user has said yes (Settings /
-//! the first-run prompt wire this up). No token, no credentials, no other
+//! One unauthenticated GET, run only while Settings update consent is on.
+//! The app gates start, About opening, and Check now. No token, no credentials, no other
 //! request. Every failure — offline, DNS failure, rate limiting, a body
 //! that is not the JSON we expect — comes back as `Ok(None)` or a typed
 //! `UpdateError`; nothing here panics, blocks, or opens a dialog on its

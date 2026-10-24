@@ -152,18 +152,20 @@ pub enum Message {
     /// pre-work A1). Only consulted when `ui_settings.theme` is
     /// `ThemeMode::System` — see [`App::palette`].
     SystemThemeChanged(iced::theme::Mode),
-    /// The opt-in boot-time GitHub check finished (plan 064 Task 2). `None`
-    /// covers "opted out", "no newer release", and every failure alike —
-    /// the caller never learns which.
+    /// A consented update check finished. None means no newer release.
     UpdateChecked(Option<update::Release>),
-    /// The header's "Dostupná je verzia" link was pressed. Opens
-    /// `App::available_update`'s release page in the browser; never
-    /// downloads anything.
+    /// Open the available release page in the browser, without a download.
     OpenReleasePage,
     AboutToggled,
     CheckUpdatesNow,
     UpdateCheckFailed(String),
     QuickThemeSwitch,
+    HelpRequested,
+    HelpOpened(Option<usize>),
+    HelpClosed,
+    HelpSearchChanged(String),
+    MoveFocus(bool),
+    OpenSettings,
 }
 
 /// The application's only long-lived state (plan 052 UI architecture: "a
@@ -237,6 +239,9 @@ pub struct App {
     /// (plan 064 Task 2). `None` until then, and stays `None` when the
     /// check is off, finds nothing newer, or fails.
     pub available_update: Option<update::Release>,
+    pub help_open: bool,
+    pub help_query: String,
+    help_opener: Option<usize>,
     pub about_open: bool,
     pub update_checking: bool,
     pub last_update_result: Option<String>,
@@ -337,6 +342,9 @@ impl App {
             notify_state: NotifyState::default(),
             system_theme: iced::theme::Mode::None,
             available_update: None,
+            help_open: false,
+            help_query: String::new(),
+            help_opener: None,
             about_open: false,
             update_checking: false,
             last_update_result: None,
@@ -377,11 +385,7 @@ impl App {
         }
     }
 
-    /// Window-close and tray-driven events, alongside the existing
-    /// Task-based tick loop (`sleep_then_tick`). `close_requests` has no
-    /// Task equivalent — it must be listened for continuously, not fetched
-    /// once — so these, plus live OS theme changes (A1), are the app's only
-    /// `Subscription`s.
+    /// Window, OS theme, and keyboard events stay subscribed on every screen.
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             window::close_requests().map(Message::WindowCloseRequested),
@@ -464,7 +468,13 @@ impl App {
             Message::SettingChanged(field) => self.apply_setting_change(field),
             Message::TargetAdded => self.add_target(),
             Message::TargetRemoved(index) => self.remove_target(index),
-            Message::UndoTargetRemoval => self.undo_target_removal(),
+            Message::UndoTargetRemoval => {
+                if self.help_open {
+                    Task::none()
+                } else {
+                    self.undo_target_removal()
+                }
+            }
             Message::UndoRemovalExpired(generation) => {
                 if generation == self.removal_generation {
                     self.removed_target = None;
@@ -504,6 +514,25 @@ impl App {
                     Task::none()
                 }
             }
+            Message::HelpRequested => {
+                if self.help_open {
+                    return Task::none();
+                }
+                crate::screens::help::capture_focus().map(Message::HelpOpened)
+            }
+            Message::HelpOpened(opener) => self.open_help(opener),
+            Message::HelpClosed => self.close_help(),
+            Message::HelpSearchChanged(query) => {
+                self.help_query = query;
+                Task::none()
+            }
+            Message::MoveFocus(backwards) => self.move_focus(backwards),
+            Message::OpenSettings => {
+                if !self.help_open {
+                    self.screen = Screen::Settings;
+                }
+                Task::none()
+            }
             Message::QuickThemeSwitch => {
                 let mode = if self.palette().dark {
                     ThemeMode::Light
@@ -513,6 +542,36 @@ impl App {
                 self.apply_setting_change(SettingField::Theme(mode))
             }
             Message::OpenReleasePage => self.open_release_page(),
+        }
+    }
+
+    fn open_help(&mut self, opener: Option<usize>) -> Task<Message> {
+        if self.help_open {
+            return Task::none();
+        }
+        self.help_opener = opener;
+        self.help_query.clear();
+        self.help_open = true;
+        iced::widget::operation::focus(crate::screens::help::search_id())
+    }
+
+    fn close_help(&mut self) -> Task<Message> {
+        if !self.help_open {
+            return Task::none();
+        }
+        self.help_open = false;
+        self.help_query.clear();
+        crate::screens::help::restore_focus(self.help_opener.take())
+    }
+
+    fn move_focus(&self, backwards: bool) -> Task<Message> {
+        if self.help_open {
+            return iced::widget::operation::focus(crate::screens::help::search_id());
+        }
+        if backwards {
+            iced::widget::operation::focus_previous()
+        } else {
+            iced::widget::operation::focus_next()
         }
     }
 
@@ -1178,9 +1237,7 @@ fn scroll_settings_to_notifications_task() -> Task<Message> {
     ))
 }
 
-/// Pure: whether `App::boot` should schedule the update-check task, given
-/// only the persisted opt-in flag. Kept separate from the async plumbing so
-/// the on/off decision is unit-testable without a `Task`.
+/// Shared consent gate for boot, About opening, and Check now.
 fn wants_update_check(ui: &UiSettings) -> bool {
     ui.check_updates
 }
@@ -1429,6 +1486,24 @@ pub fn target_is_failing(target: &TargetLive) -> bool {
     }
 }
 
+fn shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Message> {
+    use iced::keyboard::{key::Named, Key, Modifiers};
+    match (key, modifiers) {
+        (Key::Named(Named::F1), mode) if mode.is_empty() => Some(Message::HelpRequested),
+        (Key::Named(Named::Escape), _) => Some(Message::HelpClosed),
+        (Key::Named(Named::Tab), mode) if mode.is_empty() || mode == Modifiers::SHIFT => {
+            Some(Message::MoveFocus(mode.shift()))
+        }
+        (Key::Character(key), mode) if mode == Modifiers::CTRL && key.as_str() == "," => {
+            Some(Message::OpenSettings)
+        }
+        (Key::Character(key), mode) if mode == Modifiers::CTRL && key.eq_ignore_ascii_case("z") => {
+            Some(Message::UndoTargetRemoval)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1477,6 +1552,9 @@ mod tests {
             notify_state: NotifyState::default(),
             system_theme: iced::theme::Mode::None,
             available_update: None,
+            help_open: false,
+            help_query: String::new(),
+            help_opener: None,
             about_open: false,
             update_checking: false,
             last_update_result: None,
@@ -1736,14 +1814,5 @@ mod tests {
     }
     include!("../tests/support/t21.rs");
     include!("../tests/support/t22.rs");
-}
-
-fn shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Message> {
-    if modifiers == iced::keyboard::Modifiers::CTRL
-        && key == iced::keyboard::Key::Character("z".into())
-    {
-        Some(Message::UndoTargetRemoval)
-    } else {
-        None
-    }
+    include!("../tests/support/t23.rs");
 }

@@ -80,7 +80,8 @@ impl App {
             Screen::Settings => crate::screens::settings::view(self, palette),
         };
 
-        let body = column![header, content]
+        let footer = crate::screens::help::opener(palette);
+        let body = column![header, content, footer]
             .spacing(SPACE.s6)
             .width(Fill)
             .height(Fill)
@@ -114,6 +115,11 @@ impl App {
                     .align_bottom(Fill)
                     .into(),
             );
+        }
+        if self.help_open {
+            layers.push(iced::widget::opaque(crate::screens::help::view(
+                self, palette,
+            )));
         }
         iced::widget::stack(layers).into()
     }

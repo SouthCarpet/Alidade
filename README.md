@@ -46,6 +46,8 @@ The desktop window starts at 1280 × 800 and has a minimum size of 1008 × 640.
 
 Removing a target shows a toast for 10 seconds. **Undo** or **Ctrl+Z** restores the complete target at the same position, including any unfinished port text. A later removal replaces the earlier undo. After the toast expires, the removal cannot be undone.
 
+**Help (F1)** is at the foot of every screen. The panel has searchable explanations of idle ping, ping under load, jitter, and shortcuts. **Ctrl+,** opens Settings. **Escape** closes Help and returns focus to the control that opened it. Tab can reach the Help opener; Enter or Space opens it. Tab stays in the help search while the panel is open. The panel and undo toast appear at once, with the same text when reduced motion is enabled.
+
 ## Licence
 
 Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

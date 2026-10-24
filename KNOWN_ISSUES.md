@@ -6,9 +6,9 @@
 - The release binaries are unsigned, so Windows SmartScreen may warn on first run.
 - A target whose recent samples are all losses can have a blank sparkline. The row is still marked as failing in the danger colour.
 - The selected theme applies live. System follows the OS only when iced reports a theme change.
-- Buttons have no visible focus ring in this iced version. Text inputs show a 2 px border.
+- Most buttons have no visible focus ring in this iced version. The Help opener has a 2 px focus ring and supports Enter and Space. Text inputs show a 2 px border.
 - Home shows its empty state until a single test runs.
-- Tray and toast behaviour was verified by tests, not observed live.
+- Windows tray and notification toast behaviour was verified by tests, not observed live. In-app Undo is covered by state tests. Its live-input check is skipped under the capture-only limit.
 - The tray and ICMP support are Windows-only.
 - The UI is English only.
 - Chart zoom is not implemented. Use range chips and hover.

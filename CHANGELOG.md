@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Searchable Help on every screen and F1, with ping and jitter hints. Ctrl+, opens Settings. Escape closes Help and returns focus. Help and Undo show at once, including with reduced motion.
+
 - A 10-second Undo toast for target removal, with Ctrl+Z support and full restoration of the target and its port input.
 
 - Header with the Alidade mark and name, a theme quick switch, and a Light/Dark/System segmented control in Settings.
