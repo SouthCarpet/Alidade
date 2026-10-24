@@ -28,7 +28,7 @@ Settings holds the measurement interval, which metrics run, the targets table (g
 
 | State | Expected result |
 | --- | --- |
-| Header | Alidade name and mark; Settings last; a quick Light/Dark switch. |
+| Header | Alidade name and mark; Settings last; active tab uses a fill and square marker; a quick Light/Dark switch. |
 | Appearance | Light, Dark, System segments; same saved `theme` as the header switch; System follows the OS. |
 | About closed | Last section of Settings; opening it uses the shared consent gate. |
 | About, checks off | Version, explicit off message, consent checkbox, disabled Check now; no request from start, opening About, or Check now. |
@@ -36,7 +36,7 @@ Settings holds the measurement interval, which metrics run, the targets table (g
 | Remove | Bottom-right Undo toast names the target for 10 seconds. Undo or Ctrl+Z restores its index, all fields, and raw port text. A stale timer cannot close a newer undo. |
 | Help | Footer Help or F1 opens a searchable panel with idle ping, ping under load, jitter, and shortcuts. No animation; same text with reduced motion. |
 | Keyboard | Ctrl+, opens Settings. Escape closes Help and returns focus to the previous control. Help has keyboard focus and opens with Enter or Space. Tab stays in help search; Settings and Undo shortcuts do not act through the panel. |
-| Window | Default 1280 � 800, minimum 1008 � 640; the Settings body scrolls in its own gutter. |
+| Window | Default 1280 x 800, minimum 1008 x 640; the Settings body scrolls in its own gutter. |
 
 This run follows the controller's capture-only limit of 2026-10-24: no Computer Use or global pointer/key input. The existing startup flags capture the header at the top of Settings and Appearance with the closed About heading at the end (`--scroll settings-notifications`). Captures use light and dark themes at 1280 x 800 and 1008 x 640. Files are `A:/tmp/120-p2-maker/shots/header-{theme}-{size}.png` and `settings-tail-{theme}-{size}.png`, where theme is light/dark and size is default/min.
 

@@ -42,7 +42,7 @@ The header shows the Alidade mark and name. Settings is the last tab. The header
 
 Settings > About shows the app version and the time and result of the last update check in this session. Update checks are off by default. When enabled, one request goes to GitHub at start, when About opens, and on **Check now**. The checkbox itself sends no request. With checks off, all three paths send no request and **Check now** is disabled. Alidade does not download or install an update.
 
-The desktop window starts at 1280 × 800 and has a minimum size of 1008 × 640.
+The desktop window starts at 1280 x 800 and has a minimum size of 1008 x 640.
 
 Removing a target shows a toast for 10 seconds. **Undo** or **Ctrl+Z** restores the complete target at the same position, including any unfinished port text. A later removal replaces the earlier undo. After the toast expires, the removal cannot be undone.
 

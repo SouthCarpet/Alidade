@@ -79,9 +79,8 @@ pub enum TargetField {
     Port(String),
 }
 
-/// One theme choice. `System` is the default; resolving it against the real
-/// OS theme, and actually repainting every screen, is out of scope here (see
-/// the module doc comment) — this only records the choice.
+/// One theme choice. System is the default; App::palette resolves the OS
+/// theme for every screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeMode {
     #[default]
@@ -116,10 +115,8 @@ pub struct Threshold {
 pub struct UiSettings {
     pub theme: ThemeMode,
     pub autostart: bool,
-    /// Opt-in, default off (plan 064): one unauthenticated GitHub check on
-    /// boot when true. An old `ui-settings.toml` with no `check_updates`
-    /// key falls through `parse`'s default-then-overwrite loop, so it loads
-    /// as `false` the same way a real `#[serde(default)]` would.
+    /// Opt-in, default off. Every update trigger uses this saved consent.
+    /// Older files without this key still load as false.
     pub check_updates: bool,
     pub notify_master: bool,
     pub notify_ping_ms: Threshold,
@@ -565,11 +562,19 @@ fn metrics_row(palette: Palette, app: &App) -> Element<'_, Message> {
 
 fn theme_row(palette: Palette, app: &App) -> Element<'_, Message> {
     let segments = row(THEME_MODES.into_iter().map(|mode| {
-        button(text(mode.to_string()).size(TYPE.sm).font(font_medium()))
-            .padding([SPACE.s2, SPACE.s3])
-            .style(palette.segmented(mode == app.ui_settings.theme))
-            .on_press(Message::SettingChanged(SettingField::Theme(mode)))
-            .into()
+        button(
+            text(mode.to_string())
+                .size(TYPE.sm)
+                .font(if mode == app.ui_settings.theme {
+                    font_medium()
+                } else {
+                    font_regular()
+                }),
+        )
+        .padding([SPACE.s2, SPACE.s3])
+        .style(palette.segmented(mode == app.ui_settings.theme))
+        .on_press(Message::SettingChanged(SettingField::Theme(mode)))
+        .into()
     }));
     column![field_label(palette, "Theme"), segments]
         .spacing(SPACE.s1)
@@ -593,6 +598,7 @@ fn about_section(palette: Palette, app: &App) -> Element<'_, Message> {
                 text(format!("Alidade {}", env!("CARGO_PKG_VERSION")))
                     .size(TYPE.md)
                     .font(font_medium())
+                    .color(palette.text())
             ]
             .spacing(SPACE.s2)
             .align_y(Center),
@@ -636,19 +642,10 @@ fn autostart_row(palette: Palette, app: &App) -> Element<'_, Message> {
 /// confirmation dialog.
 fn check_updates_row(palette: Palette, app: &App) -> Element<'_, Message> {
     column![
-        styled_checkbox(
-            palette,
-            "Kontrolovať nové verzie pri štarte",
-            app.ui_settings.check_updates,
-            |checked| Message::SettingChanged(SettingField::CheckUpdates(checked)),
-        ),
-        note(
-            palette,
-            "Jedna požiadavka na GitHub. Nič sa nesťahuje.".to_string(),
-        ),
-    ]
-    .spacing(SPACE.s1)
-    .into()
+        styled_checkbox(palette, "Check for updates", app.ui_settings.check_updates,
+            |checked| Message::SettingChanged(SettingField::CheckUpdates(checked))),
+        note(palette, "When enabled: one GitHub request at start, when About opens, or on Check now. No download.".to_string()),
+    ].spacing(SPACE.s1).into()
 }
 
 fn budget_section(palette: Palette, app: &App) -> Element<'_, Message> {

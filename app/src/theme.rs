@@ -98,7 +98,7 @@ impl Palette {
         let palette = *self;
         move |theme, status| {
             let mut style = palette.btn_secondary()(theme, status);
-            if selected {
+            if selected && matches!(status, button::Status::Active) {
                 style.background = Some(Background::Color(col(palette.theme.surface_selected)));
                 style.text_color = palette.text();
             }

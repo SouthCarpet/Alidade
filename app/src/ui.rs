@@ -7,7 +7,7 @@
 use design_tokens::scale::{SPACE, TYPE};
 
 use iced::widget::{button, column, container, row, space, text};
-use iced::{Center, Color, Element, Fill, Font, Length};
+use iced::{Center, Color, Element, Fill, Font};
 
 use crate::state::{App, Message, Screen};
 use crate::theme::Palette;
@@ -125,12 +125,7 @@ impl App {
     }
 }
 
-/// One tab: label (medium weight + `text` colour when active, regular +
-/// `muted` otherwise) over a 2px underline (`accent` when active,
-/// transparent otherwise — same "always-present strip, colour toggles"
-/// idiom as the gallery's `section_tabs`, so switching tabs never shifts
-/// the row's height). Rendered as a ghost-style button so it is actually
-/// clickable, unlike the gallery's static demo tabs.
+/// Active tabs use a fill step and a square marker, with no edge stripe.
 fn tab(palette: Palette, screen: Screen, active: Screen) -> Element<'static, Message> {
     let is_active = screen == active;
 
@@ -147,17 +142,17 @@ fn tab(palette: Palette, screen: Screen, active: Screen) -> Element<'static, Mes
             palette.muted()
         });
 
-    let underline = if is_active {
-        strip(palette.accent(), 2.0)
-    } else {
-        strip(Color::TRANSPARENT, 2.0)
-    };
-
-    let content = column![label, underline].spacing(SPACE.s1);
-
+    let marker = container(iced::widget::Space::new().width(6.0).height(6.0)).style(move |_| {
+        container::Style::default().background(if is_active {
+            palette.accent()
+        } else {
+            Color::TRANSPARENT
+        })
+    });
+    let content = row![marker, label].spacing(SPACE.s2).align_y(Center);
     button(content)
-        .padding([SPACE.s1, 0.0])
-        .style(palette.btn_ghost())
+        .padding([SPACE.s2, SPACE.s3])
+        .style(palette.segmented(is_active))
         .on_press(Message::ScreenSelected(screen))
         .into()
 }
@@ -167,7 +162,7 @@ fn tab(palette: Palette, screen: Screen, active: Screen) -> Element<'static, Mes
 /// downloads anything itself.
 fn update_link<'a>(palette: Palette, release: &update::Release) -> Element<'a, Message> {
     button(
-        text(format!("Dostupná je verzia {}", release.tag))
+        text(format!("Version {} is available", release.tag))
             .size(TYPE.xs)
             .font(font_regular())
             .color(palette.muted()),
@@ -176,13 +171,6 @@ fn update_link<'a>(palette: Palette, release: &update::Release) -> Element<'a, M
     .style(palette.btn_ghost())
     .on_press(Message::OpenReleasePage)
     .into()
-}
-
-fn strip(color: Color, height: f32) -> Element<'static, Message> {
-    container(iced::widget::space::horizontal().height(Length::Fixed(height)))
-        .width(Fill)
-        .style(move |_| iced::widget::container::Style::default().background(color))
-        .into()
 }
 
 /// Alidade mark geometry from assets/icon.svg, drawn in the active palette.
@@ -221,7 +209,7 @@ pub fn app_mark(palette: Palette) -> Element<'static, Message> {
                 &path,
                 canvas::Stroke::default()
                     .with_color(self.0.accent())
-                    .with_width(20.0),
+                    .with_width(20.0 * scale),
             );
             frame.fill(&Path::circle([192.0, 46.0].into(), 20.0), self.0.accent());
             vec![frame.into_geometry()]

@@ -17,7 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Set the desktop minimum window size to 1008 × 640. The default remains 1280 × 800.
+- Mark the active tab with a fill and a small square instead of an edge underline.
+
+- Set the desktop minimum window size to 1008 x 640. The default remains 1280 x 800.
 - Show all update-check text in English. Checks remain off by default and every trigger uses the same consent gate.
 
 - Use Fira Sans for text and Fira Sans Tabular for metric numbers and chart labels, with a plain zero.
