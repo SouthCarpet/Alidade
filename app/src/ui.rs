@@ -43,16 +43,34 @@ impl App {
             .map(|screen| tab(palette, screen, self.screen)))
         .spacing(SPACE.s6);
 
-        // Plan 064 Task 2: a quiet, right-aligned line next to the tabs when
-        // a newer release is known. Nothing renders here otherwise.
-        let header: Element<'_, Message> = match &self.available_update {
-            Some(release) => row![tabs, space::horizontal(), update_link(palette, release)]
-                .spacing(SPACE.s4)
-                .width(Fill)
-                .align_y(Center)
-                .into(),
-            None => tabs.into(),
+        let switch_label = if palette.dark {
+            "Use light theme"
+        } else {
+            "Use dark theme"
         };
+        let mut tools = row![
+            space::horizontal(),
+            button(text(switch_label).size(TYPE.xs))
+                .padding([SPACE.s2, SPACE.s3])
+                .style(palette.btn_ghost())
+                .on_press(Message::QuickThemeSwitch)
+        ]
+        .align_y(Center)
+        .spacing(SPACE.s2);
+        if let Some(release) = &self.available_update {
+            tools = tools.push(update_link(palette, release));
+        }
+        let brand = row![
+            app_mark(palette),
+            text("Alidade")
+                .size(TYPE.md)
+                .font(font_medium())
+                .color(palette.text())
+        ]
+        .spacing(SPACE.s2)
+        .align_y(Center);
+        let header =
+            column![row![brand, tools].width(Fill).align_y(Center), tabs].spacing(SPACE.s4);
 
         let content: Element<'_, Message> = match self.screen {
             Screen::Home => crate::screens::home::view(self, palette),
@@ -134,4 +152,49 @@ fn strip(color: Color, height: f32) -> Element<'static, Message> {
         .width(Fill)
         .style(move |_| iced::widget::container::Style::default().background(color))
         .into()
+}
+
+/// Alidade mark geometry from assets/icon.svg, drawn in the active palette.
+pub fn app_mark(palette: Palette) -> Element<'static, Message> {
+    use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path};
+    struct Mark(Palette);
+    impl canvas::Program<Message> for Mark {
+        type State = ();
+        fn draw(
+            &self,
+            _: &(),
+            renderer: &iced::Renderer,
+            _: &iced::Theme,
+            bounds: iced::Rectangle,
+            _: iced::mouse::Cursor,
+        ) -> Vec<Geometry> {
+            let mut frame = Frame::new(renderer, bounds.size());
+            // Use the same mark geometry as assets/icon.svg, with palette colours.
+            let scale = bounds.width / 256.0;
+            frame.scale(scale);
+            let path = Path::new(|p| {
+                p.move_to([64.0, 96.0].into());
+                p.line_to([64.0, 116.0].into());
+                p.line_to([192.0, 116.0].into());
+                p.line_to([192.0, 72.0].into());
+                p.move_to([60.0, 163.0].into());
+                p.line_to([196.0, 163.0].into());
+                p.move_to([76.0, 163.0].into());
+                p.line_to([76.0, 187.0].into());
+                p.move_to([128.0, 163.0].into());
+                p.line_to([128.0, 194.0].into());
+                p.move_to([180.0, 163.0].into());
+                p.line_to([180.0, 187.0].into());
+            });
+            frame.stroke(
+                &path,
+                canvas::Stroke::default()
+                    .with_color(self.0.accent())
+                    .with_width(20.0),
+            );
+            frame.fill(&Path::circle([192.0, 46.0].into(), 20.0), self.0.accent());
+            vec![frame.into_geometry()]
+        }
+    }
+    Canvas::new(Mark(palette)).width(28.0).height(28.0).into()
 }

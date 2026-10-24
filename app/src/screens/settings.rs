@@ -90,7 +90,7 @@ pub enum ThemeMode {
     Dark,
 }
 
-pub const THEME_MODES: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
+pub const THEME_MODES: [ThemeMode; 3] = [ThemeMode::Light, ThemeMode::Dark, ThemeMode::System];
 
 impl fmt::Display for ThemeMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -465,15 +465,16 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
         section_title(palette, "Measurement"),
         interval_row(palette, app),
         metrics_row(palette, app),
-        theme_row(palette, app),
         autostart_row(palette, app),
-        check_updates_row(palette, app),
         budget_section(palette, app),
         section_title(palette, "Targets"),
         targets_table(palette, app),
         add_target_row(palette, app),
         section_title(palette, "Notifications"),
         notifications_section(palette, app),
+        section_title(palette, "Appearance"),
+        theme_row(palette, app),
+        about_section(palette, app),
     ]
     .spacing(SPACE.s6)
     .width(Fill);
@@ -563,18 +564,62 @@ fn metrics_row(palette: Palette, app: &App) -> Element<'_, Message> {
 }
 
 fn theme_row(palette: Palette, app: &App) -> Element<'_, Message> {
-    column![
-        field_label(palette, "Theme"),
-        pick_list(THEME_MODES, Some(app.ui_settings.theme), |mode| {
-            Message::SettingChanged(SettingField::Theme(mode))
-        })
-        .text_size(TYPE.sm)
-        .padding([SPACE.s2, SPACE.s3])
-        .width(Length::Fixed(160.0))
-        .style(pick_list_style(palette)),
-    ]
-    .spacing(SPACE.s1)
-    .into()
+    let segments = row(THEME_MODES.into_iter().map(|mode| {
+        button(text(mode.to_string()).size(TYPE.sm).font(font_medium()))
+            .padding([SPACE.s2, SPACE.s3])
+            .style(palette.segmented(mode == app.ui_settings.theme))
+            .on_press(Message::SettingChanged(SettingField::Theme(mode)))
+            .into()
+    }));
+    column![field_label(palette, "Theme"), segments]
+        .spacing(SPACE.s1)
+        .into()
+}
+
+fn about_section(palette: Palette, app: &App) -> Element<'_, Message> {
+    let label = if app.about_open {
+        "About (close)"
+    } else {
+        "About (open)"
+    };
+    let heading = button(text(label).size(TYPE.md).font(font_medium()))
+        .style(palette.btn_ghost())
+        .on_press(Message::AboutToggled);
+    let mut body = column![heading].spacing(SPACE.s3);
+    if app.about_open {
+        body = body.push(
+            row![
+                crate::ui::app_mark(palette),
+                text(format!("Alidade {}", env!("CARGO_PKG_VERSION")))
+                    .size(TYPE.md)
+                    .font(font_medium())
+            ]
+            .spacing(SPACE.s2)
+            .align_y(Center),
+        );
+        body = body.push(
+            text(app.update_status())
+                .size(TYPE.sm)
+                .color(palette.text()),
+        );
+        if let Some(at) = app.last_update_at {
+            body = body.push(note(
+                palette,
+                format!("Last check: {} UTC (this session)", super::format_time(at)),
+            ));
+        }
+        body = body.push(check_updates_row(palette, app));
+        let check = button(text("Check now").size(TYPE.sm))
+            .padding([SPACE.s2, SPACE.s3])
+            .style(palette.btn_secondary());
+        body = body.push(
+            check.on_press_maybe(
+                (app.ui_settings.check_updates && !app.update_checking)
+                    .then_some(Message::CheckUpdatesNow),
+            ),
+        );
+    }
+    body.into()
 }
 
 fn autostart_row(palette: Palette, app: &App) -> Element<'_, Message> {

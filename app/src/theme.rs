@@ -90,6 +90,22 @@ impl Palette {
         col(self.theme.border)
     }
 
+    /// Selected theme segment: sheet and hairline, shared selected fill.
+    pub fn segmented(
+        &self,
+        selected: bool,
+    ) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+        let palette = *self;
+        move |theme, status| {
+            let mut style = palette.btn_secondary()(theme, status);
+            if selected {
+                style.background = Some(Background::Color(col(palette.theme.surface_selected)));
+                style.text_color = palette.text();
+            }
+            style
+        }
+    }
+
     /// UI live-refresh interval from the motion scale. Used for the
     /// Continuous countdown, never as a measurement cadence.
     pub fn live_tick() -> Duration {

@@ -24,6 +24,19 @@ History filters stored rounds by From and To dates. It shows a count of rounds i
 
 Settings holds the measurement interval, which metrics run, the targets table (game-server presets may carry an unverified badge), daily data budget, theme, Windows autostart, and notifications. Notifications use a master switch and three threshold rows. Toasts are Windows-only and rate-limited.
 
+## Shared controls (plan 120 p2)
+
+| State | Expected result |
+| --- | --- |
+| Header | Alidade name and mark; Settings last; a quick Light/Dark switch. |
+| Appearance | Light, Dark, System segments; same saved `theme` as the header switch; System follows the OS. |
+| About closed | Last section of Settings; opening it uses the shared consent gate. |
+| About, checks off | Version, explicit off message, consent checkbox, disabled Check now; no request from start, opening About, or Check now. |
+| About, checks on | At most one request in flight; result and UTC time of the last check in this session; failures are shown. |
+| Window | Default 1280 × 800, minimum 1008 × 640; the Settings body scrolls in its own gutter. |
+
+These states require light and dark captures at both window sizes. Captures and gate logs for this work are under `A:/tmp/120-p2-maker/`; they do not replace the historical screenshots below.
+
 ## Screenshots
 
 All captures are 1280 by 800 pixels. Light is on the left. Dark is on the right.

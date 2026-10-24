@@ -10,7 +10,7 @@ Alidade measures a fixed internet link over time and keeps the record. Each full
 - Continuous shows a chart and a table of rounds.
 - Ping monitor shows target sparklines.
 - History exports CSV and copies diagnostics.
-- Settings edits targets and notification thresholds.
+- Settings edits targets and notification thresholds, theme, and update consent. About is its last section.
 - The tray supports close-to-tray and toast notifications.
 
 ## Quick start
@@ -35,6 +35,14 @@ See [INSTALL.md](INSTALL.md), [CHANGELOG.md](CHANGELOG.md), and [KNOWN_ISSUES.md
 ## Desktop appearance
 
 The desktop app uses vendored Kaliber design tokens 0.10.0, with light and dark palettes. Raised panes use a tone step and a 1 px hairline. Text uses Fira Sans; metric numbers and chart labels use Fira Sans Tabular, with equal-width figures and a plain zero.
+
+## Desktop controls
+
+The header shows the Alidade mark and name. Settings is the last tab. The header theme switch chooses Light or Dark from the theme in use. Settings > Appearance has Light, Dark, and System segments. System is the default and follows Windows. Both controls save the same `theme` preference in `ui-settings.toml`, beside `settings.toml`.
+
+Settings > About shows the app version and the time and result of the last update check in this session. Update checks are off by default. When enabled, one request goes to GitHub at start, when About opens, and on **Check now**. The checkbox itself sends no request. With checks off, all three paths send no request and **Check now** is disabled. Alidade does not download or install an update.
+
+The desktop window starts at 1280 × 800 and has a minimum size of 1008 × 640.
 
 ## Licence
 

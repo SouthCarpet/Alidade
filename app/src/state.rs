@@ -150,6 +150,10 @@ pub enum Message {
     /// `App::available_update`'s release page in the browser; never
     /// downloads anything.
     OpenReleasePage,
+    AboutToggled,
+    CheckUpdatesNow,
+    UpdateCheckFailed(String),
+    QuickThemeSwitch,
 }
 
 /// The application's only long-lived state (plan 052 UI architecture: "a
@@ -221,6 +225,10 @@ pub struct App {
     /// (plan 064 Task 2). `None` until then, and stays `None` when the
     /// check is off, finds nothing newer, or fails.
     pub available_update: Option<update::Release>,
+    pub about_open: bool,
+    pub update_checking: bool,
+    pub last_update_result: Option<String>,
+    pub last_update_at: Option<SystemTime>,
 }
 
 impl App {
@@ -266,14 +274,6 @@ impl App {
             Some(ScrollTarget::SettingsNotifications) => scroll_settings_to_notifications_task(),
             None => Task::none(),
         };
-        // Plan 064 Task 2: one opt-in GitHub check, only when the user has
-        // said yes on the Settings screen.
-        let update_task = if wants_update_check(&ui_settings) {
-            update_check_task()
-        } else {
-            Task::none()
-        };
-
         // Spawned here (App::boot runs on the winit thread before `.run()`
         // starts pumping it — see tray.rs's module doc) so the tray's
         // hidden window shares the same message queue the real window uses.
@@ -289,42 +289,48 @@ impl App {
             .or_else(|| tray_error.map(|message| Toast { ok: false, message }));
         // `--screen` (B1) picks the initial tab; unset falls back to Home.
         let screen = flags.screen.unwrap_or_default();
+        let mut app = App {
+            screen,
+            settings,
+            settings_path,
+            settings_error,
+            round_running: false,
+            last_round: None,
+            scheduler,
+            continuous_running: false,
+            continuous_paused: false,
+            time_range: TimeRange::default(),
+            chart_rows: Vec::new(),
+            history_from: history_from.clone(),
+            history_to: history_to.clone(),
+            history_rows: Vec::new(),
+            ping_running: false,
+            clock_armed: false,
+            ping_targets,
+            toast,
+            load_error: None,
+            ui_settings,
+            interval_text,
+            budget_gb_text,
+            notify_ping_ms_text,
+            notify_download_mbit_text,
+            notify_loss_pct_text,
+            target_port_text,
+            new_target: NewTargetForm::default(),
+            tray,
+            window_id: None,
+            start_minimized: flags.minimized,
+            notify_state: NotifyState::default(),
+            system_theme: iced::theme::Mode::None,
+            available_update: None,
+            about_open: false,
+            update_checking: false,
+            last_update_result: None,
+            last_update_at: None,
+        };
+        let update_task = app.request_update_check();
         (
-            App {
-                screen,
-                settings,
-                settings_path,
-                settings_error,
-                round_running: false,
-                last_round: None,
-                scheduler,
-                continuous_running: false,
-                continuous_paused: false,
-                time_range: TimeRange::default(),
-                chart_rows: Vec::new(),
-                history_from: history_from.clone(),
-                history_to: history_to.clone(),
-                history_rows: Vec::new(),
-                ping_running: false,
-                clock_armed: false,
-                ping_targets,
-                toast,
-                load_error: None,
-                ui_settings,
-                interval_text,
-                budget_gb_text,
-                notify_ping_ms_text,
-                notify_download_mbit_text,
-                notify_loss_pct_text,
-                target_port_text,
-                new_target: NewTargetForm::default(),
-                tray,
-                window_id: None,
-                start_minimized: flags.minimized,
-                notify_state: NotifyState::default(),
-                system_theme: iced::theme::Mode::None,
-                available_update: None,
-            },
+            app,
             Task::batch([
                 load_chart_task(),
                 load_history_task(history_from, history_to),
@@ -460,11 +466,71 @@ impl App {
                 self.system_theme = mode;
                 Task::none()
             }
-            Message::UpdateChecked(release) => {
-                self.available_update = release;
-                Task::none()
+            Message::UpdateChecked(release) => self.finish_update_check(Ok(release)),
+            Message::UpdateCheckFailed(error) => self.finish_update_check(Err(error)),
+            Message::CheckUpdatesNow => self.request_update_check(),
+            Message::AboutToggled => {
+                self.about_open = !self.about_open;
+                if self.about_open {
+                    self.request_update_check()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::QuickThemeSwitch => {
+                let mode = if self.palette().dark {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                self.apply_setting_change(SettingField::Theme(mode))
             }
             Message::OpenReleasePage => self.open_release_page(),
+        }
+    }
+
+    // All entry points pass the same consent gate before creating network work.
+    fn request_update_check(&mut self) -> Task<Message> {
+        if !wants_update_check(&self.ui_settings) || self.update_checking {
+            return Task::none();
+        }
+        self.update_checking = true;
+        update_check_task()
+    }
+
+    fn finish_update_check(
+        &mut self,
+        result: Result<Option<update::Release>, String>,
+    ) -> Task<Message> {
+        self.update_checking = false;
+        if !wants_update_check(&self.ui_settings) {
+            return Task::none();
+        }
+        self.last_update_at = Some(SystemTime::now());
+        self.last_update_result = Some(match result {
+            Ok(release) => {
+                let text = match &release {
+                    Some(release) => format!("Last result: version {} is available.", release.tag),
+                    None => "Last result: you have the latest version.".to_string(),
+                };
+                self.available_update = release;
+                text
+            }
+            Err(error) => format!("Last result: check failed ({error})."),
+        });
+        Task::none()
+    }
+
+    /// Current update-check feedback, including the opt-out state.
+    pub fn update_status(&self) -> &str {
+        if !self.ui_settings.check_updates {
+            "Update checks are off. Enable them below to check GitHub."
+        } else if self.update_checking {
+            "Checking GitHub..."
+        } else {
+            self.last_update_result
+                .as_deref()
+                .unwrap_or("No check in this session.")
         }
     }
 
@@ -782,6 +848,10 @@ impl App {
             }
             SettingField::CheckUpdates(value) => {
                 self.ui_settings.check_updates = value;
+                if !value {
+                    self.available_update = None;
+                    self.update_checking = false;
+                }
                 return self.persist_ui_settings();
             }
             SettingField::BudgetEnabled(enabled) => {
@@ -1062,21 +1132,19 @@ fn wants_update_check(ui: &UiSettings) -> bool {
     ui.check_updates
 }
 
-/// One unauthenticated GitHub check (plan 064 Task 2). The client is built
-/// inside the task, not shared, since this is the only place the app ever
-/// needs one. Every failure — offline, rate limiting, a malformed body —
-/// collapses to `None`, the same as "opted out" or "nothing newer": the UI
-/// never distinguishes them.
+/// One bounded GitHub request; preserve failures for the About result.
 fn update_check_task() -> Task<Message> {
     Task::perform(
         async {
             let client = reqwest::Client::new();
             update::check(env!("CARGO_PKG_VERSION"), &client)
                 .await
-                .ok()
-                .flatten()
+                .map_err(|error| error.to_string())
         },
-        Message::UpdateChecked,
+        |result| match result {
+            Ok(release) => Message::UpdateChecked(release),
+            Err(error) => Message::UpdateCheckFailed(error),
+        },
     )
 }
 
@@ -1354,6 +1422,10 @@ mod tests {
             notify_state: NotifyState::default(),
             system_theme: iced::theme::Mode::None,
             available_update: None,
+            about_open: false,
+            update_checking: false,
+            last_update_result: None,
+            last_update_at: None,
         }
     }
 
@@ -1607,4 +1679,5 @@ mod tests {
             "turning it back off must not schedule the check"
         );
     }
+    include!("../tests/support/t21.rs");
 }

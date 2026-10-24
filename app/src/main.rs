@@ -28,7 +28,11 @@ fn main() -> iced::Result {
         App::view,
     )
     .title("Alidade")
-    .window_size(window)
+    .window(iced::window::Settings {
+        size: window.into(),
+        min_size: Some(iced::Size::new(1008.0, 640.0)),
+        ..Default::default()
+    })
     // The window hides to the tray on close instead of exiting outright
     // (Task 6 Step 2); `App::update`'s `WindowCloseRequested` handler
     // decides between hiding and a real close.

@@ -6,7 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Header with the Alidade mark and name, a theme quick switch, and a Light/Dark/System segmented control in Settings.
+- About as the last Settings section: version, opt-in update checks at start, on opening About, and on Check now, with the last result and time for this session.
+
 ### Changed
+
+- Set the desktop minimum window size to 1008 × 640. The default remains 1280 × 800.
+- Show all update-check text in English. Checks remain off by default and every trigger uses the same consent gate.
 
 - Use Fira Sans for text and Fira Sans Tabular for metric numbers and chart labels, with a plain zero.
 
