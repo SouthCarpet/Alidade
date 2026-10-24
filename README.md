@@ -2,8 +2,6 @@
 
 Alidade measures a fixed internet link over time and keeps the record. Each full round records download, upload, ping, and ping under load: whether latency gets worse while the link is busy. It stores the results in SQLite and can export CSV evidence for an ISP dispute. `ping-monitor` is a denser mode for watching a game-server or other target's latency.
 
-![Continuous screen](app/docs/screens/continuous-light.png)
-
 ## Features
 
 - Home loads the latest stored round at start and runs a single test. An empty store shows the empty state; a read failure shows its reason.
@@ -39,6 +37,12 @@ The desktop app uses vendored Kaliber design tokens 0.10.0, with light and dark 
 ## Desktop controls
 
 Home reads stored history from the database selected by `--db`, or the normal app database. It keeps stored rows separate from live results, so it does not invent sample counts or durations that were not saved. The existing store query reads rounds from the Unix epoch to the current time before selecting the newest. This also loads a last round older than the chart window.
+
+Home has a page title and one line with the round mode and UTC time. One tinted summary shows download, upload, idle ping, and ping under load. Idle packet loss is supporting text below it. Missing measurements show a reason instead of a zero; the full reason is available on hover. An empty store has text guidance and no placeholder illustration.
+
+While a round runs, Home shows **Measuring** and a 2 px activity line. The line enters by position and alpha over the 120 ms token, capped at 320 ms, then stays still until the round ends. Its length does not estimate completion. The line has no geometry while idle, and its layout space stays reserved. Windows animation preference is read at start and before each round. With reduced motion, an unreadable preference, or a non-Windows platform, the final line shows at once. Text and focus stay the same.
+
+Settings and Continuous use the same page-title scale and one metadata line. Continuous uses plain state text. Read errors and export notices use that line, with full details on hover and a Dismiss action for notices. Its compact head leaves room for the table header and a complete row at the minimum window size; more rows remain available in the table's scroll area. The chart itself is unchanged in this step.
 
 The header shows the Alidade mark and name. Settings is the last tab. The header theme switch chooses Light or Dark from the theme in use. Settings > Appearance has Light, Dark, and System segments. System is the default and follows Windows. Both controls save the same `theme` preference in `ui-settings.toml`, beside `settings.toml`.
 

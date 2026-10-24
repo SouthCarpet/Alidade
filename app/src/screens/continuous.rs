@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use alidade_store::RoundRow;
 use design_tokens::scale::{SPACE, TYPE};
-use iced::widget::{button, column, container, row, text, Canvas};
+use iced::widget::{button, column, container, row, text, tooltip, Canvas};
 use iced::{Center, Element, Fill, Length};
 
 use crate::chart::{LineChart, TimeRange};
@@ -13,9 +13,7 @@ use crate::state::{App, Message};
 use crate::theme::Palette;
 use crate::ui::{font_medium, font_regular};
 
-use super::{
-    countdown_label, newest_rows, rounds_table, status_pill, with_toast, TABLE_VISIBLE_ROWS,
-};
+use super::{adaptive_rounds_table, countdown_label, newest_rows, page_head, TABLE_VISIBLE_ROWS};
 
 const RANGE_CHIPS: [(TimeRange, &str); 4] = [
     (TimeRange::Hour, "1 h"),
@@ -37,27 +35,52 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
     .width(Fill)
     .height(Length::Fixed(SPACE.s6 * 10.0));
 
-    let mut sections: Vec<Element<'_, Message>> = Vec::new();
-    if let Some(err) = &app.load_error {
-        sections.push(
-            text(err.clone())
-                .size(TYPE.sm)
-                .font(font_regular())
-                .color(palette.danger())
-                .into(),
-        );
-    }
-    sections.push(actions(palette, app));
-    sections.push(range_chips(palette, app.time_range));
+    let mut sections: Vec<Element<'_, Message>> = vec![head(palette, app)];
     sections.push(palette.card(container(chart).width(Fill)));
-    sections.push(rounds_table(palette, &table));
-    let body = column(sections).spacing(SPACE.s4).width(Fill);
+    sections.push(adaptive_rounds_table(palette, &table));
+    let body = column(sections).spacing(SPACE.s3).width(Fill).height(Fill);
 
-    with_toast(
-        palette,
-        app,
-        container(body).width(Fill).height(Fill).into(),
-    )
+    container(body).width(Fill).height(Fill).into()
+}
+
+fn head(palette: Palette, app: &App) -> Element<'_, Message> {
+    let metadata = match (&app.load_error, &app.toast) {
+        (Some(error), Some(toast)) => format!("History read failed: {error}. {}", toast.message),
+        (Some(error), None) => format!("History read failed: {error}"),
+        (None, Some(toast)) => toast.message.clone(),
+        (None, None) => format!(
+            "{}. {} recent rounds.",
+            status_text(app),
+            app.chart_rows.len()
+        ),
+    };
+    let title = page_head(palette, "Continuous", metadata.clone());
+    let title: Element<'_, Message> = if app.load_error.is_some() || app.toast.is_some() {
+        tooltip(
+            title,
+            palette.reason_note(
+                text(metadata)
+                    .size(TYPE.sm)
+                    .font(font_regular())
+                    .color(palette.text()),
+            ),
+            tooltip::Position::Bottom,
+        )
+        .delay(Palette::tooltip_delay())
+        .into()
+    } else {
+        title
+    };
+    row![
+        title,
+        column![actions(palette, app), range_chips(palette, app.time_range)]
+            .spacing(SPACE.s1)
+            .align_x(iced::alignment::Horizontal::Right),
+    ]
+    .spacing(SPACE.s6)
+    .align_y(Center)
+    .width(Fill)
+    .into()
 }
 
 fn actions(palette: Palette, app: &App) -> Element<'_, Message> {
@@ -74,11 +97,18 @@ fn actions(palette: Palette, app: &App) -> Element<'_, Message> {
         .style(palette.btn_secondary())
         .on_press(Message::ExportCsv);
 
-    let pill = status_pill(palette, status_text(app));
-    row![pause, resume, export, pill]
+    let mut actions = row![pause, resume, export]
         .spacing(SPACE.s3)
-        .align_y(Center)
-        .into()
+        .align_y(Center);
+    if app.toast.is_some() {
+        actions = actions.push(
+            button(text("Dismiss").size(TYPE.sm).font(font_medium()))
+                .padding([SPACE.s2, SPACE.s3])
+                .style(palette.btn_ghost())
+                .on_press(Message::DismissToast),
+        );
+    }
+    actions.into()
 }
 
 fn range_chips<'a>(palette: Palette, active: TimeRange) -> Element<'a, Message> {
@@ -116,7 +146,7 @@ fn status_text(app: &App) -> String {
     }
     let now = SystemTime::now();
     let deadline = app.scheduler.next_due(now);
-    countdown_label(now, deadline, true)
+    countdown_label(now, deadline, app.round_running).replace(" · next", ". Next")
 }
 
 /// Duration each time-range chip covers. Kept next to the chips so a new

@@ -21,6 +21,31 @@ pub mod settings;
 
 pub(crate) const TABLE_VISIBLE_ROWS: usize = 8;
 
+pub(crate) fn page_head<'a>(
+    palette: Palette,
+    title: &'static str,
+    metadata: String,
+) -> Element<'a, Message> {
+    let metadata = metadata.split_whitespace().collect::<Vec<_>>().join(" ");
+    column![
+        text(title)
+            .size(TYPE.xxxl)
+            .font(iced::Font {
+                weight: iced::font::Weight::Semibold,
+                ..font_regular()
+            })
+            .color(palette.text()),
+        text(metadata)
+            .size(TYPE.sm)
+            .font(font_numeric())
+            .color(palette.muted())
+            .wrapping(text::Wrapping::None),
+    ]
+    .spacing(SPACE.s1)
+    .width(Fill)
+    .into()
+}
+
 /// How many of the newest in-range rounds the table shows.
 pub(crate) fn newest_rows(rows: &[RoundRow], n: usize) -> Vec<RoundRow> {
     let start = rows.len().saturating_sub(n);
@@ -125,28 +150,6 @@ pub(crate) fn countdown_label(now: SystemTime, deadline: SystemTime, running: bo
     } else {
         format!("Next round in {mm:02}:{ss:02}")
     }
-}
-
-pub(crate) fn status_pill<'a>(palette: Palette, label: String) -> Element<'a, Message> {
-    let background = Color::from(palette.theme.accent_soft);
-    let foreground = Color::from(palette.theme.accent_soft_foreground);
-    container(
-        text(label)
-            .size(TYPE.xs)
-            .font(font_medium())
-            .color(foreground),
-    )
-    .padding([SPACE.s1, SPACE.s3])
-    .style(move |_| {
-        container::Style::default()
-            .background(background)
-            .border(Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: iced::border::radius(RADIUS.pill),
-            })
-    })
-    .into()
 }
 
 pub(crate) fn toast_view<'a>(palette: Palette, toast: &Toast) -> Element<'a, Message> {
@@ -265,6 +268,29 @@ fn table_row<'a>(palette: Palette, row: &RoundRow) -> Element<'a, Message> {
 }
 
 pub(crate) fn rounds_table<'a>(palette: Palette, rows: &[RoundRow]) -> Element<'a, Message> {
+    let row_h = TYPE.sm + SPACE.s2 * 2.0;
+    rounds_table_sized(
+        palette,
+        rows,
+        Length::Fixed(row_h * ((TABLE_VISIBLE_ROWS + 1) as f32)),
+    )
+}
+
+pub(crate) fn adaptive_rounds_table<'a>(
+    palette: Palette,
+    rows: &[RoundRow],
+) -> Element<'a, Message> {
+    container(rounds_table_sized(palette, rows, Fill))
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+fn rounds_table_sized<'a>(
+    palette: Palette,
+    rows: &[RoundRow],
+    height: Length,
+) -> Element<'a, Message> {
     let mut body: Vec<Element<'a, Message>> = vec![table_header(palette)];
     if rows.is_empty() {
         body.push(
@@ -279,8 +305,6 @@ pub(crate) fn rounds_table<'a>(palette: Palette, rows: &[RoundRow]) -> Element<'
             body.push(table_row(palette, row));
         }
     }
-    let row_h = TYPE.sm + SPACE.s2 * 2.0;
-    let height = row_h * ((TABLE_VISIBLE_ROWS + 1) as f32);
     // F2 (Task 7 fix wave): a default scrollbar floats over the content, so
     // it covered the rightmost (Loss) column at the table's right edge —
     // in both History and here (Continuous shares this helper). An
@@ -288,9 +312,13 @@ pub(crate) fn rounds_table<'a>(palette: Palette, rows: &[RoundRow]) -> Element<'
     // columns never sit under it.
     let gutter = scrollable::Scrollbar::new().spacing(SPACE.s2);
     palette.well_frame(
-        scrollable(column(body).spacing(SPACE.s2).width(Fill))
-            .height(Length::Fixed(height))
-            .direction(scrollable::Direction::Vertical(gutter)),
+        container(
+            scrollable(column(body).spacing(SPACE.s2).width(Fill))
+                .height(Fill)
+                .direction(scrollable::Direction::Vertical(gutter)),
+        )
+        .height(height)
+        .width(Fill),
     )
 }
 

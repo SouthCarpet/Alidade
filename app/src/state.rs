@@ -100,6 +100,87 @@ impl LatestRound {
     }
 }
 
+/// The line moves as a whole. Its width never encodes invented progress.
+#[derive(Debug, Clone, Copy)]
+pub struct ActivityFrame {
+    pub offset: f32,
+    pub alpha: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActivityLine {
+    started: Option<Instant>,
+    reduced: bool,
+}
+
+impl ActivityLine {
+    pub fn new(reduced: bool) -> Self {
+        Self {
+            started: None,
+            reduced,
+        }
+    }
+
+    pub fn start(&mut self, at: Instant) {
+        self.started = Some(at);
+    }
+
+    pub fn stop(&mut self) {
+        self.started = None;
+    }
+
+    pub fn frame(&self, at: Instant) -> Option<ActivityFrame> {
+        let started = self.started?;
+        let progress = if self.reduced {
+            1.0
+        } else {
+            Palette::activity_progress(at.saturating_duration_since(started))
+        };
+        Some(ActivityFrame {
+            offset: (progress - 1.0) * Palette::activity_offset(),
+            alpha: progress,
+        })
+    }
+
+    pub fn is_animating(&self, at: Instant) -> bool {
+        !self.reduced
+            && self.started.is_some_and(|started| {
+                at.saturating_duration_since(started) < Palette::activity_duration()
+            })
+    }
+}
+
+#[cfg(windows)]
+fn reduced_motion() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        #[link_name = "SystemParametersInfoW"]
+        fn system_parameters_info(
+            action: u32,
+            param: u32,
+            value: *mut std::ffi::c_void,
+            flags: u32,
+        ) -> i32;
+    }
+    const GET_CLIENT_AREA_ANIMATION: u32 = 0x1042;
+    let mut enabled = 1_i32;
+    // SAFETY: this GET action writes one BOOL to a valid, aligned local i32.
+    let ok = unsafe {
+        system_parameters_info(
+            GET_CLIENT_AREA_ANIMATION,
+            0,
+            (&mut enabled as *mut i32).cast(),
+            0,
+        )
+    };
+    ok == 0 || enabled == 0
+}
+
+#[cfg(not(windows))]
+fn reduced_motion() -> bool {
+    true
+}
+
 /// One enabled ping-monitor target, with the samples taken this session.
 #[derive(Debug, Clone)]
 pub struct TargetLive {
@@ -149,6 +230,7 @@ pub enum Message {
     /// in a target's *starting* samples, before any live index is meaningful.
     PingHistoryLoaded(Vec<(String, Vec<PingSample>)>),
     Tick,
+    ActivityTick(Instant),
     StartPingMonitor,
     StopPingMonitor,
     HistoryFromChanged(String),
@@ -221,6 +303,8 @@ pub struct App {
     pub round_running: bool,
     pub last_round: Option<LatestRound>,
     pub last_round_error: Option<String>,
+    pub activity: ActivityLine,
+    pub activity_at: Instant,
     pub scheduler: Scheduler,
     pub continuous_running: bool,
     pub continuous_paused: bool,
@@ -354,6 +438,8 @@ impl App {
             round_running: false,
             last_round,
             last_round_error,
+            activity: ActivityLine::new(reduced_motion()),
+            activity_at: Instant::now(),
             scheduler,
             continuous_running: false,
             continuous_paused: false,
@@ -428,7 +514,13 @@ impl App {
 
     /// Window, OS theme, and keyboard events stay subscribed on every screen.
     pub fn subscription(&self) -> Subscription<Message> {
+        let activity = if self.activity.is_animating(self.activity_at) {
+            window::frames().map(Message::ActivityTick)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
+            activity,
             window::close_requests().map(Message::WindowCloseRequested),
             iced::system::theme_changes().map(Message::SystemThemeChanged),
             iced::event::listen_with(|event, _, _| match event {
@@ -467,6 +559,10 @@ impl App {
             Message::TargetsRefreshed(samples) => self.on_targets_refreshed(samples),
             Message::PingHistoryLoaded(history) => self.on_ping_history_loaded(history),
             Message::Tick => self.on_tick(),
+            Message::ActivityTick(at) => {
+                self.activity_at = at;
+                Task::none()
+            }
             Message::StartPingMonitor => self.start_ping_monitor(),
             Message::StopPingMonitor => {
                 self.ping_running = false;
@@ -731,11 +827,18 @@ impl App {
         }
     }
 
+    fn arm_activity(&mut self) {
+        self.activity = ActivityLine::new(reduced_motion());
+        self.activity_at = Instant::now();
+        self.activity.start(self.activity_at);
+    }
+
     fn start_single_test(&mut self) -> Task<Message> {
         if self.round_running {
             return Task::none();
         }
         self.round_running = true;
+        self.arm_activity();
         let settings = self.settings.clone();
         Task::perform(run_single_test(settings), |outcome| {
             Message::RoundFinished(Box::new(outcome))
@@ -759,6 +862,7 @@ impl App {
 
     fn on_round_finished(&mut self, outcome: RoundOutcome) -> Task<Message> {
         self.round_running = false;
+        self.activity.stop();
         let bytes = outcome
             .result
             .down_load
@@ -809,6 +913,7 @@ impl App {
 
     fn begin_scheduled_round(&mut self, started: SystemTime) -> Task<Message> {
         self.round_running = true;
+        self.arm_activity();
         let plan = self.scheduler.plan_next_round(started);
         self.scheduler.record_round_start(started, plan.kind);
         let settings = self.settings.clone();
@@ -1598,6 +1703,8 @@ mod tests {
             round_running: false,
             last_round: None,
             last_round_error: None,
+            activity: ActivityLine::new(true),
+            activity_at: Instant::now(),
             scheduler,
             continuous_running: false,
             continuous_paused: false,

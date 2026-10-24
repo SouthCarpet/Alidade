@@ -1,53 +1,101 @@
-//! Home screen (plan Task 2): five KPI tiles, "Run single test", and the
-//! empty/error states around it.
-//!
-//! The core rule, straight from the brief: a missing measurement is shown
-//! as missing, with its reason — never as `0.00`, never as a bare dash that
-//! could mean either. `RoundResult`'s `down`/`up`/`ping_*` fields are all
-//! `Option` for exactly that reason (see `engine/src/round.rs`), and every
-//! tile below reads that `Option` honestly rather than defaulting it away.
+//! Home: a page head, four measured facts, and an honest empty state.
 
-use design_tokens::scale::{RADIUS, SPACE, TYPE};
-use iced::alignment::Vertical;
-use iced::widget::{button, column, container, row, text, Space, Stack};
-use iced::{Border, Center, Color, Element, Fill, Length};
+use alidade_engine::{LoadWindow, PingStats, RoundKind, RoundResult, Throughput};
+use design_tokens::scale::{SPACE, TYPE};
+use iced::alignment::Horizontal;
+use iced::widget::{button, canvas, column, container, row, text, tooltip, Canvas, Space};
+use iced::{mouse, Center, Color, Element, Fill, Length, Point, Rectangle, Renderer, Theme};
 
-use alidade_engine::{LoadWindow, PingStats, RoundResult, Throughput};
-
-use crate::state::{App, LatestRound, Message};
+use crate::state::{ActivityFrame, App, LatestRound, Message};
 use crate::theme::Palette;
 use crate::ui::{font_medium, font_numeric, font_regular};
 
-// Task 7 pre-work A1: `palette` now comes from the caller (`App::palette`,
-// resolved from `UiSettings.theme`) instead of being hardcoded here — the
-// only change this task makes to this file, which another session has
-// in-flight edits in.
-pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
-    let mut sections: Vec<Element<'_, Message>> = Vec::new();
+/// One row of the Home summary. A missing reason never receives a unit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SummaryFact {
+    pub label: &'static str,
+    pub text: String,
+    pub(crate) measured: bool,
+}
 
-    if let Some(message) = &app.settings_error {
-        sections.push(banner(palette, message));
+/// Four facts by construction, with the same formatting for live and stored data.
+pub fn summary_facts(round: &LatestRound) -> [SummaryFact; 4] {
+    let [download, upload, idle, load, _loss] = round_values(round);
+    [
+        fact("Download", download, "Mbit/s"),
+        fact("Upload", upload, "Mbit/s"),
+        fact("Idle ping", idle, "ms"),
+        fact("Ping under load", load, "ms"),
+    ]
+}
+
+fn fact(label: &'static str, value: MetricValue, unit: &str) -> SummaryFact {
+    let measured = matches!(&value, MetricValue::Value(_));
+    SummaryFact {
+        label,
+        text: measurement_text(value, unit),
+        measured,
     }
+}
 
-    sections.push(actions(palette, app));
+fn measurement_text(value: MetricValue, unit: &str) -> String {
+    match value {
+        MetricValue::Value(digits) => format!("{digits} {unit}"),
+        MetricValue::Missing(reason) => reason,
+    }
+}
 
+pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
+    let activity = Canvas::new(ActivityStrip {
+        palette,
+        frame: app.activity.frame(app.activity_at),
+    })
+    .width(Fill)
+    .height(2.0);
+    let head = column![
+        super::page_head(
+            palette,
+            "Link measurement",
+            round_metadata(app.last_round.as_ref())
+        ),
+        column![actions(palette, app), activity].spacing(SPACE.s1),
+    ]
+    .spacing(SPACE.s3)
+    .width(Fill);
+    let mut sections: Vec<Element<'_, Message>> = vec![head.into()];
+    if let Some(error) = &app.settings_error {
+        sections.push(banner(palette, error));
+    }
     if let Some(error) = &app.last_round_error {
         sections.push(banner(
             palette,
             &format!("Stored round unavailable: {error}"),
         ));
     }
-
     match &app.last_round {
+        Some(round) => sections.extend(round_sections(palette, round)),
         None if app.last_round_error.is_none() => sections.push(empty_state(palette)),
         None => {}
-        Some(round) => sections.extend(round_sections(palette, round)),
     }
-
-    container(column(sections).spacing(SPACE.s6).width(Fill))
+    container(column(sections).spacing(SPACE.s4).width(Fill))
         .width(Fill)
         .height(Fill)
         .into()
+}
+
+fn round_metadata(round: Option<&LatestRound>) -> String {
+    let Some(round) = round else {
+        return "Local measurement history".into();
+    };
+    let kind = match round {
+        LatestRound::Live(outcome) => outcome.result.kind,
+        LatestRound::Stored(row) => row.mode,
+    };
+    let label = match kind {
+        RoundKind::Full => "Full round",
+        RoundKind::PingOnly => "Ping round",
+    };
+    format!("{label}, {} UTC", super::format_time(round.started_at()))
 }
 
 fn round_sections<'a>(palette: Palette, round: &LatestRound) -> Vec<Element<'a, Message>> {
@@ -55,36 +103,185 @@ fn round_sections<'a>(palette: Palette, round: &LatestRound) -> Vec<Element<'a, 
     if let Some(error) = round.persist_error() {
         sections.push(banner(
             palette,
-            &format!("round measured but could not be saved: {error}"),
+            &format!("Round measured but could not be saved: {error}"),
         ));
     }
     if round.capped() {
         sections.push(banner(
             palette,
-            "capped: the daily data budget ended a throughput phase early",
+            "The daily data budget ended a throughput phase early.",
         ));
     }
-    sections.push(match round {
-        LatestRound::Live(outcome) => tiles(palette, &outcome.result),
-        LatestRound::Stored(row) => stored_tiles(palette, row),
-    });
+    sections.push(summary(palette, summary_facts(round)));
+    let [_, _, _, _, loss] = round_values(round);
+    sections.push(
+        text(format!("Idle packet loss: {}", measurement_text(loss, "%")))
+            .size(TYPE.sm)
+            .font(font_numeric())
+            .color(palette.muted())
+            .into(),
+    );
     sections
 }
 
-fn stored_tiles<'a>(palette: Palette, stored: &alidade_store::RoundRow) -> Element<'a, Message> {
-    let [download, upload, idle, load, loss] = stored_values(stored);
-    row![
-        kpi_tile(palette, "Download", &download, "Mbit/s", None),
-        kpi_tile(palette, "Upload", &upload, "Mbit/s", None),
-        kpi_tile(palette, "Idle ping", &idle, "ms", None),
-        kpi_tile(palette, "Ping under load", &load, "ms", None),
-        kpi_tile(palette, "Loss", &loss, "%", None),
+fn summary<'a>(palette: Palette, facts: [SummaryFact; 4]) -> Element<'a, Message> {
+    let mut rows = Vec::new();
+    for (index, fact) in facts.into_iter().enumerate() {
+        if index > 0 {
+            rows.push(
+                container(Space::new().width(Fill).height(1.0))
+                    .style(move |_| container::Style::default().background(palette.border()))
+                    .into(),
+            );
+        }
+        rows.push(summary_row(palette, fact));
+    }
+    palette.summary_field(column(rows).width(Fill))
+}
+
+fn summary_row<'a>(palette: Palette, fact: SummaryFact) -> Element<'a, Message> {
+    let shown = fact.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let value = text(shown)
+        .size(TYPE.md)
+        .font(if fact.measured {
+            font_numeric()
+        } else {
+            font_regular()
+        })
+        .color(palette.summary_ink())
+        .wrapping(text::Wrapping::None)
+        .align_x(if fact.measured {
+            Horizontal::Right
+        } else {
+            Horizontal::Left
+        })
+        .width(Fill);
+    let cells = row![
+        text(fact.label)
+            .size(TYPE.sm)
+            .font(font_medium())
+            .color(palette.summary_ink())
+            .width(Length::Fixed(SPACE.s6 * 6.0)),
+        container(value).width(Fill).clip(true),
     ]
-    .spacing(SPACE.s4)
+    .spacing(SPACE.s3)
+    .padding([SPACE.s1, 0.0])
+    .align_y(Center)
+    .width(Fill);
+    if fact.measured {
+        cells.into()
+    } else {
+        tooltip(
+            cells,
+            palette.reason_note(
+                text(fact.text)
+                    .size(TYPE.sm)
+                    .font(font_regular())
+                    .color(palette.text()),
+            ),
+            tooltip::Position::Top,
+        )
+        .delay(Palette::tooltip_delay())
+        .into()
+    }
+}
+
+fn actions(palette: Palette, app: &App) -> Element<'_, Message> {
+    let run = button(text("Run single test").size(TYPE.sm).font(font_medium()))
+        .padding([SPACE.s2, SPACE.s4])
+        .style(palette.btn_primary())
+        .on_press_maybe((!app.round_running).then_some(Message::RunSingleTest));
+    let continuous = button(text("Start continuous").size(TYPE.sm).font(font_medium()))
+        .padding([SPACE.s2, SPACE.s4])
+        .style(palette.btn_secondary())
+        .on_press(Message::Resume);
+    let mut actions = row![run, continuous].spacing(SPACE.s3).align_y(Center);
+    if app.round_running {
+        actions = actions.push(text("Measuring").size(TYPE.sm).color(palette.muted()));
+    }
+    actions.into()
+}
+
+fn empty_state<'a>(palette: Palette) -> Element<'a, Message> {
+    column![
+        text("No rounds yet")
+            .size(TYPE.lg)
+            .font(font_medium())
+            .color(palette.text()),
+        text("No measurements are stored. Run a single test or start continuous mode.")
+            .size(TYPE.sm)
+            .font(font_regular())
+            .color(palette.muted()),
+    ]
+    .spacing(SPACE.s2)
     .into()
 }
 
-fn stored_values(stored: &alidade_store::RoundRow) -> [TileValue; 5] {
+fn banner<'a>(palette: Palette, message: &str) -> Element<'a, Message> {
+    palette.well_frame(
+        text(message.to_string())
+            .size(TYPE.sm)
+            .font(font_regular())
+            .color(palette.danger()),
+    )
+}
+
+struct ActivityStrip {
+    palette: Palette,
+    frame: Option<ActivityFrame>,
+}
+
+impl canvas::Program<Message> for ActivityStrip {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let Some(activity) = self.frame else {
+            return Vec::new();
+        };
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let mut color: Color = self.palette.accent();
+        color.a *= activity.alpha;
+        frame.stroke(
+            &canvas::Path::line(
+                Point::new(activity.offset, 1.0),
+                Point::new(bounds.width + activity.offset, 1.0),
+            ),
+            canvas::Stroke::default().with_width(2.0).with_color(color),
+        );
+        vec![frame.into_geometry()]
+    }
+}
+
+fn round_values(round: &LatestRound) -> [MetricValue; 5] {
+    match round {
+        LatestRound::Live(outcome) => live_values(&outcome.result),
+        LatestRound::Stored(row) => stored_values(row),
+    }
+}
+
+fn live_values(result: &RoundResult) -> [MetricValue; 5] {
+    [
+        throughput_value(result.down, "download", result.skipped_reason.as_deref()),
+        throughput_value(result.up, "upload", result.skipped_reason.as_deref()),
+        ping_idle_value(result.ping_idle, result.skipped_reason.as_deref()),
+        ping_under_load_value(
+            result.ping_down,
+            result.ping_up,
+            result.down_load,
+            result.up_load,
+        ),
+        loss_value(result.ping_idle, result.skipped_reason.as_deref()),
+    ]
+}
+
+fn stored_values(stored: &alidade_store::RoundRow) -> [MetricValue; 5] {
     let reason = stored.skipped_reason.as_deref();
     let download = stored_speed(stored.down_bps, "download", reason);
     let upload = stored_speed(stored.up_bps, "upload", reason);
@@ -92,25 +289,28 @@ fn stored_values(stored: &alidade_store::RoundRow) -> [TileValue; 5] {
         stored.ping_idle_ms,
         stored.loss_idle_pct.or(stored.loss_pct),
     ) {
-        (Some(avg), _) => TileValue::Value(format!("{avg:.1}")),
-        (None, Some(loss)) => TileValue::Missing(format!("no answer ({loss:.0}% loss)")),
-        (None, None) => TileValue::Missing(missing_reason(reason, "ping")),
+        (Some(avg), _) => MetricValue::Value(format!("{avg:.1}")),
+        (None, Some(loss)) => MetricValue::Missing(format!("no answer ({loss:.0}% loss)")),
+        (None, None) => MetricValue::Missing(missing_reason(reason, "ping")),
     };
     let load = match super::ping_load_ms(stored) {
-        Some(avg) => TileValue::Value(format!("{avg:.1}")),
-        None => TileValue::Missing(stored_load_reason(stored)),
+        Some(avg) => MetricValue::Value(format!("{avg:.1}")),
+        None => MetricValue::Missing(stored_load_reason(stored)),
     };
     let loss = match stored.loss_idle_pct.or(stored.loss_pct) {
-        Some(loss) => TileValue::Value(format!("{loss:.2}")),
-        None => TileValue::Missing(missing_reason(reason, "ping")),
+        Some(loss) => MetricValue::Value(format!("{loss:.2}")),
+        None if stored.ping_idle_ms.is_some() => {
+            MetricValue::Missing("loss not stored for this round".into())
+        }
+        None => MetricValue::Missing(missing_reason(reason, "ping")),
     };
     [download, upload, idle, load, loss]
 }
 
-fn stored_speed(value: Option<f64>, label: &str, reason: Option<&str>) -> TileValue {
+fn stored_speed(value: Option<f64>, label: &str, reason: Option<&str>) -> MetricValue {
     match value {
-        Some(bps) => TileValue::Value(format!("{:.2}", bps / 1_000_000.0)),
-        None => TileValue::Missing(missing_reason(reason, label)),
+        Some(bps) => MetricValue::Value(format!("{:.2}", bps / 1_000_000.0)),
+        None => MetricValue::Missing(missing_reason(reason, label)),
     }
 }
 
@@ -138,308 +338,9 @@ fn stored_load_reason(stored: &alidade_store::RoundRow) -> String {
     "no throughput phase ran this round".into()
 }
 
-// ---------------------------------------------------------------------
-// Actions: Run single test / Start continuous, and the "Measuring" pill
-// ---------------------------------------------------------------------
-
-fn actions(palette: Palette, app: &App) -> Element<'_, Message> {
-    let run_button = button(text("Run single test").size(TYPE.sm).font(font_medium()))
-        .padding([SPACE.s2, SPACE.s4])
-        .style(palette.btn_primary())
-        .on_press_maybe((!app.round_running).then_some(Message::RunSingleTest));
-
-    // Task 4 wired the scheduler: `Message::Resume` starts continuous
-    // measurement and selects the Continuous screen, so the label is true.
-    let continuous_button = button(text("Start continuous").size(TYPE.sm).font(font_medium()))
-        .padding([SPACE.s2, SPACE.s4])
-        .style(palette.btn_secondary())
-        .on_press(Message::Resume);
-
-    let mut bar = row![run_button, continuous_button]
-        .spacing(SPACE.s3)
-        .align_y(Center);
-    if app.round_running {
-        bar = bar.push(status_pill(palette, "Measuring"));
-    }
-    bar.into()
-}
-
-fn status_pill<'a>(palette: Palette, label: &'static str) -> Element<'a, Message> {
-    let background = Color::from(palette.theme.accent_soft);
-    let foreground = Color::from(palette.theme.accent_soft_foreground);
-    container(
-        text(label)
-            .size(TYPE.xs)
-            .font(font_medium())
-            .color(foreground),
-    )
-    .padding([SPACE.s1, SPACE.s3])
-    .style(move |_| {
-        container::Style::default()
-            .background(background)
-            .border(Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: iced::border::radius(RADIUS.pill),
-            })
-    })
-    .into()
-}
-
-/// A recessed well: `well` background + `border`, no inset shadow — the
-/// same recipe as `design/gallery-iced/src/main.rs`'s `well()`, scoped
-/// locally here since Home is its only caller so far.
-fn well<'a>(palette: Palette, content: Element<'a, Message>) -> Element<'a, Message> {
-    let border = Color::from(palette.theme.border);
-    container(content)
-        .padding(SPACE.s3)
-        .width(Fill)
-        .style(move |_| {
-            container::Style::default()
-                .background(palette.well())
-                .border(Border {
-                    color: border,
-                    width: 1.0,
-                    radius: iced::border::radius(RADIUS.md),
-                })
-        })
-        .into()
-}
-
-fn banner<'a>(palette: Palette, message: &str) -> Element<'a, Message> {
-    let dot_color = Color::from(palette.theme.danger);
-    let dot = container(
-        Space::new()
-            .width(Length::Fixed(8.0))
-            .height(Length::Fixed(8.0)),
-    )
-    .style(move |_| {
-        container::Style::default()
-            .background(dot_color)
-            .border(Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: iced::border::radius(RADIUS.pill),
-            })
-    });
-
-    well(
-        palette,
-        row![
-            dot,
-            text(message.to_string())
-                .size(TYPE.sm)
-                .color(palette.text())
-        ]
-        .spacing(SPACE.s2)
-        .align_y(Center)
-        .into(),
-    )
-}
-
-fn empty_state<'a>(palette: Palette) -> Element<'a, Message> {
-    let icon_color = Color::from(palette.theme.border);
-    let icon = container(
-        Space::new()
-            .width(Length::Fixed(26.0))
-            .height(Length::Fixed(26.0)),
-    )
-    .style(move |_| {
-        container::Style::default()
-            .background(icon_color)
-            .border(Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: iced::border::radius(RADIUS.pill),
-            })
-    });
-
-    let body = column![
-        icon,
-        text("No rounds yet. Run a single test or start continuous mode.")
-            .size(TYPE.sm)
-            .font(font_medium())
-            .color(palette.text()),
-    ]
-    .spacing(SPACE.s3)
-    .align_x(Center)
-    .width(Fill);
-
-    palette.card(container(body).width(Fill).padding(SPACE.s6))
-}
-
-// ---------------------------------------------------------------------
-// KPI tiles
-// ---------------------------------------------------------------------
-
-fn tiles<'a>(palette: Palette, result: &RoundResult) -> Element<'a, Message> {
-    let download = throughput_value(result.down, "download", result.skipped_reason.as_deref());
-    let upload = throughput_value(result.up, "upload", result.skipped_reason.as_deref());
-    let idle = ping_idle_value(result.ping_idle, result.skipped_reason.as_deref());
-    let under_load = ping_under_load_value(
-        result.ping_down,
-        result.ping_up,
-        result.down_load,
-        result.up_load,
-    );
-    let loss = loss_value(result.ping_idle, result.skipped_reason.as_deref());
-
-    // `meta` (min/max/current, for the gauge's 2px tick) is `None` at every
-    // call site: Task 2 never has round history yet, only this one just-
-    // measured round. Passing `None` here is the honest "lone value" case
-    // `rule_design_language.md` point 3(b) names — Task 4/5's aggregates are
-    // this signature's real consumer.
-    let items = vec![
-        kpi_tile(palette, "Download", &download, "Mbit/s", None),
-        kpi_tile(palette, "Upload", &upload, "Mbit/s", None),
-        kpi_tile(palette, "Idle ping", &idle, "ms", None),
-        kpi_tile(palette, "Ping under load", &under_load, "ms", None),
-        kpi_tile(palette, "Loss", &loss, "%", None),
-    ];
-    row(items).spacing(SPACE.s4).into()
-}
-
-/// One KPI tile: label / value (or the reason there is none) / micro-gauge.
-/// `meta` is `(min, max, current)` for the 2px tick; `None` draws the 3px
-/// rule as a baseline only (`rule_design_language.md` point 3(b): "a lone
-/// value ... uses the 3px rule as a baseline only, no fake span").
-fn kpi_tile<'a>(
-    palette: Palette,
-    label: &'static str,
-    value: &TileValue,
-    unit: &'static str,
-    meta: Option<(f64, f64, f64)>,
-) -> Element<'a, Message> {
-    let label_text = text(tracked(label))
-        .size(TYPE.xs)
-        .font(font_medium())
-        .color(palette.muted());
-
-    let value_row: Element<'a, Message> = match value {
-        TileValue::Value(digits) => {
-            let numeral_font = iced::Font {
-                weight: iced::font::Weight::Semibold,
-                ..font_numeric()
-            };
-            row![
-                text(digits.clone())
-                    .size(TYPE.xxl)
-                    .font(numeral_font)
-                    .color(palette.text()),
-                text(format!(" {unit}"))
-                    .size(TYPE.sm)
-                    .font(font_medium())
-                    .color(palette.muted()),
-            ]
-            .align_y(Vertical::Bottom)
-            .into()
-        }
-        TileValue::Missing(reason) => text(reason.clone())
-            .size(TYPE.sm)
-            .font(font_regular())
-            .color(palette.muted())
-            .into(),
-    };
-
-    let gauge = micro_gauge(
-        palette,
-        meta.map(|(min, max, current)| gauge_fraction(min, max, current)),
-    );
-
-    palette.card(column![label_text, value_row, gauge].spacing(SPACE.s2))
-}
-
-const GAUGE_H: f32 = 9.0;
-const GAUGE_BAR_H: f32 = 3.0;
-const GAUGE_TICK_W: f32 = 2.0;
-const GAUGE_TICK_H: f32 = 7.0;
-
-/// The Tier-1 KPI micro-gauge (`rule_design_language.md` point 3(b)): a 3px
-/// tabular baseline at 40% `border`, with a 2px `accent_active` tick at the
-/// current value when `tick_frac` is `Some`. Positions the tick with two
-/// `FillPortion` spacers rather than a fixed pixel width (unlike the
-/// gallery's demo tile), so it stays correct at whatever width the tile
-/// actually renders at.
-fn micro_gauge<'a>(palette: Palette, tick_frac: Option<f32>) -> Element<'a, Message> {
-    let baseline_color = Color {
-        a: 0.4,
-        ..Color::from(palette.theme.border)
-    };
-    let baseline_bar = container(Space::new().width(Fill).height(Length::Fixed(GAUGE_BAR_H)))
-        .style(move |_| {
-            container::Style::default()
-                .background(baseline_color)
-                .border(Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: iced::border::radius(RADIUS.pill),
-                })
-        });
-    let baseline_layer: Element<'a, Message> = container(baseline_bar)
-        .width(Fill)
-        .height(Length::Fixed(GAUGE_H))
-        .align_y(Vertical::Center)
-        .into();
-
-    let Some(fraction) = tick_frac else {
-        return baseline_layer;
-    };
-
-    let fraction = fraction.clamp(0.0, 1.0);
-    let before = ((fraction * 1000.0).round() as u16).max(1);
-    let after = (((1.0 - fraction) * 1000.0).round() as u16).max(1);
-    let tick_color = Color::from(palette.theme.accent_active);
-    let tick_mark = container(
-        Space::new()
-            .width(Length::Fixed(GAUGE_TICK_W))
-            .height(Length::Fixed(GAUGE_TICK_H)),
-    )
-    .style(move |_| container::Style::default().background(tick_color));
-    let tick_layer: Element<'a, Message> = row![
-        Space::new().width(Length::FillPortion(before)),
-        tick_mark,
-        Space::new().width(Length::FillPortion(after)),
-    ]
-    .width(Fill)
-    .height(Length::Fixed(GAUGE_H))
-    .align_y(Vertical::Center)
-    .into();
-
-    Stack::new()
-        .width(Fill)
-        .height(Length::Fixed(GAUGE_H))
-        .push(baseline_layer)
-        .push(tick_layer)
-        .into()
-}
-
-/// Best-effort +0.04em label tracking (Tier-2 fallback: `iced_core::Text`
-/// has no letter-spacing field at all — see the gallery's `tracked_upper`
-/// doc comment for the same gap). Unlike `tracked_upper` this keeps the
-/// label's natural case ("Download", not "DOWNLOAD"): the KPI label role is
-/// not the section-title role that one is for.
-fn tracked(label: &str) -> String {
-    let mut out = String::with_capacity(label.len() * 2);
-    for (index, ch) in label.chars().enumerate() {
-        if index > 0 {
-            out.push('\u{2009}');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-// ---------------------------------------------------------------------
-// Pure helpers: `Option<f64>` (and friends) -> what the tile shows.
-// The whole point of the release lives here — unit-tested below.
-// ---------------------------------------------------------------------
-
-/// What one KPI tile shows: a formatted number, or the reason there is
-/// none. Mirrors the CLI's own `format_speed`/`format_ping`/
-/// `format_under_load` (`cli/src/main.rs`) so the same round reads the same
-/// way in both faces.
+/// A real formatted measurement, or the reason it is missing.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum TileValue {
+pub(crate) enum MetricValue {
     Value(String),
     Missing(String),
 }
@@ -466,19 +367,19 @@ fn throughput_value(
     value: Option<Throughput>,
     label: &str,
     skipped_reason: Option<&str>,
-) -> TileValue {
+) -> MetricValue {
     match value {
-        Some(t) => TileValue::Value(format!("{:.2}", t.bits_per_sec / 1_000_000.0)),
-        None => TileValue::Missing(missing_reason(skipped_reason, label)),
+        Some(t) => MetricValue::Value(format!("{:.2}", t.bits_per_sec / 1_000_000.0)),
+        None => MetricValue::Missing(missing_reason(skipped_reason, label)),
     }
 }
 
-fn ping_idle_value(stats: Option<PingStats>, skipped_reason: Option<&str>) -> TileValue {
+fn ping_idle_value(stats: Option<PingStats>, skipped_reason: Option<&str>) -> MetricValue {
     match stats {
-        None => TileValue::Missing(missing_reason(skipped_reason, "ping")),
+        None => MetricValue::Missing(missing_reason(skipped_reason, "ping")),
         Some(stats) => match stats.avg_ms {
-            Some(avg) => TileValue::Value(format!("{avg:.1}")),
-            None => TileValue::Missing(format!("no answer ({:.0}% loss)", stats.loss_pct)),
+            Some(avg) => MetricValue::Value(format!("{avg:.1}")),
+            None => MetricValue::Missing(format!("no answer ({:.0}% loss)", stats.loss_pct)),
         },
     }
 }
@@ -488,10 +389,10 @@ fn ping_idle_value(stats: Option<PingStats>, skipped_reason: Option<&str>) -> Ti
 /// measured zero, never a stand-in for "not measured". Only the absence of
 /// `PingStats` itself (ping not selected, or no target configured) is
 /// `Missing`.
-fn loss_value(stats: Option<PingStats>, skipped_reason: Option<&str>) -> TileValue {
+fn loss_value(stats: Option<PingStats>, skipped_reason: Option<&str>) -> MetricValue {
     match stats {
-        None => TileValue::Missing(missing_reason(skipped_reason, "ping")),
-        Some(stats) => TileValue::Value(format!("{:.2}", stats.loss_pct)),
+        None => MetricValue::Missing(missing_reason(skipped_reason, "ping")),
+        Some(stats) => MetricValue::Value(format!("{:.2}", stats.loss_pct)),
     }
 }
 
@@ -504,14 +405,14 @@ fn ping_under_load_value(
     up_stats: Option<PingStats>,
     down_load: Option<LoadWindow>,
     up_load: Option<LoadWindow>,
-) -> TileValue {
+) -> MetricValue {
     match (
         down_stats.and_then(|s| s.avg_ms),
         up_stats.and_then(|s| s.avg_ms),
     ) {
-        (Some(down), Some(up)) => TileValue::Value(format!("{:.1}", (down + up) / 2.0)),
-        (Some(value), None) | (None, Some(value)) => TileValue::Value(format!("{value:.1}")),
-        (None, None) => TileValue::Missing(under_load_missing_reason(
+        (Some(down), Some(up)) => MetricValue::Value(format!("{:.1}", (down + up) / 2.0)),
+        (Some(value), None) | (None, Some(value)) => MetricValue::Value(format!("{value:.1}")),
+        (None, None) => MetricValue::Missing(under_load_missing_reason(
             down_stats, up_stats, down_load, up_load,
         )),
     }
@@ -538,17 +439,6 @@ fn under_load_missing_reason(
         );
     }
     "no throughput phase ran this round".to_string()
-}
-
-/// Where the micro-gauge tick sits along `[min, max]`, clamped to the track.
-/// `min == max` (a single sample so far) has no span to place a tick along,
-/// so it sits at the middle rather than dividing by zero.
-fn gauge_fraction(min: f64, max: f64, value: f64) -> f32 {
-    if max > min {
-        (((value - min) / (max - min)) as f32).clamp(0.0, 1.0)
-    } else {
-        0.5
-    }
 }
 
 #[cfg(test)]
@@ -580,7 +470,7 @@ mod tests {
     fn a_measured_throughput_is_shown_in_mbit() {
         assert_eq!(
             throughput_value(Some(throughput(123.456)), "download", None),
-            TileValue::Value("123.46".to_string())
+            MetricValue::Value("123.46".to_string())
         );
     }
 
@@ -589,11 +479,11 @@ mod tests {
         let reason = "download: provider: server returned status 429; upload: partial reading discarded (1.2s of 10.0s budget measured, 12% — below the 50% needed to trust the rate)";
         assert_eq!(
             throughput_value(None, "download", Some(reason)),
-            TileValue::Missing("provider: server returned status 429".to_string())
+            MetricValue::Missing("provider: server returned status 429".to_string())
         );
         assert_eq!(
             throughput_value(None, "upload", Some(reason)),
-            TileValue::Missing(
+            MetricValue::Missing(
                 "partial reading discarded (1.2s of 10.0s budget measured, 12% — below the 50% needed to trust the rate)"
                     .to_string()
             )
@@ -604,7 +494,7 @@ mod tests {
     fn a_missing_throughput_with_no_skip_reason_reads_as_not_selected() {
         assert_eq!(
             throughput_value(None, "download", None),
-            TileValue::Missing("not selected for this round".to_string())
+            MetricValue::Missing("not selected for this round".to_string())
         );
     }
 
@@ -612,7 +502,7 @@ mod tests {
     fn ping_idle_reads_the_average_when_something_answered() {
         assert_eq!(
             ping_idle_value(Some(stats(Some(23.4), 0.0)), None),
-            TileValue::Value("23.4".to_string())
+            MetricValue::Value("23.4".to_string())
         );
     }
 
@@ -620,7 +510,7 @@ mod tests {
     fn ping_idle_with_total_loss_says_so_instead_of_a_fake_average() {
         assert_eq!(
             ping_idle_value(Some(stats(None, 100.0)), None),
-            TileValue::Missing("no answer (100% loss)".to_string())
+            MetricValue::Missing("no answer (100% loss)".to_string())
         );
     }
 
@@ -628,7 +518,7 @@ mod tests {
     fn ping_idle_never_measured_reads_the_skip_reason() {
         assert_eq!(
             ping_idle_value(None, Some("ping: no targets configured")),
-            TileValue::Missing("no targets configured".to_string())
+            MetricValue::Missing("no targets configured".to_string())
         );
     }
 
@@ -639,7 +529,7 @@ mod tests {
         // "missing" bucket as a metric that was never measured at all.
         assert_eq!(
             loss_value(Some(stats(Some(10.0), 0.0)), None),
-            TileValue::Value("0.00".to_string())
+            MetricValue::Value("0.00".to_string())
         );
     }
 
@@ -647,7 +537,7 @@ mod tests {
     fn loss_is_missing_only_when_ping_never_ran() {
         assert_eq!(
             loss_value(None, Some("ping: no targets configured")),
-            TileValue::Missing("no targets configured".to_string())
+            MetricValue::Missing("no targets configured".to_string())
         );
     }
 
@@ -665,7 +555,7 @@ mod tests {
                 Some(window),
                 Some(window)
             ),
-            TileValue::Value("25.0".to_string())
+            MetricValue::Value("25.0".to_string())
         );
     }
 
@@ -678,7 +568,7 @@ mod tests {
         };
         assert_eq!(
             ping_under_load_value(Some(stats(Some(20.0), 0.0)), None, Some(window), None),
-            TileValue::Value("20.0".to_string())
+            MetricValue::Value("20.0".to_string())
         );
     }
 
@@ -691,7 +581,7 @@ mod tests {
         };
         assert_eq!(
             ping_under_load_value(Some(stats(None, 100.0)), None, Some(window), None),
-            TileValue::Missing("no answer (100% loss)".to_string())
+            MetricValue::Missing("no answer (100% loss)".to_string())
         );
     }
 
@@ -704,7 +594,7 @@ mod tests {
         };
         assert_eq!(
             ping_under_load_value(None, None, Some(window), None),
-            TileValue::Missing(
+            MetricValue::Missing(
                 "not enough load to measure (2 sample(s) in 2.0s of load)".to_string()
             )
         );
@@ -714,27 +604,7 @@ mod tests {
     fn ping_under_load_on_a_ping_only_round_says_no_throughput_ran() {
         assert_eq!(
             ping_under_load_value(None, None, None, None),
-            TileValue::Missing("no throughput phase ran this round".to_string())
+            MetricValue::Missing("no throughput phase ran this round".to_string())
         );
-    }
-
-    #[test]
-    fn gauge_fraction_normalises_into_the_track() {
-        assert_eq!(gauge_fraction(0.0, 100.0, 25.0), 0.25);
-        assert_eq!(
-            gauge_fraction(0.0, 100.0, -10.0),
-            0.0,
-            "below min clamps to the start of the track"
-        );
-        assert_eq!(
-            gauge_fraction(0.0, 100.0, 200.0),
-            1.0,
-            "above max clamps to the end of the track"
-        );
-    }
-
-    #[test]
-    fn gauge_fraction_with_no_span_sits_in_the_middle_instead_of_dividing_by_zero() {
-        assert_eq!(gauge_fraction(50.0, 50.0, 50.0), 0.5);
     }
 }

@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Page heads on Home, Settings, and Continuous, with one metadata line per screen.
+- One Home summary with four measured facts, missing-value reasons, and full reasons on hover.
+- A Home activity line that enters by position and alpha, then stays still while the round runs. Reduced motion shows its final state at once.
+
 - Load the latest stored round on Home at start, including rounds older than the chart window. Show a store read failure with its reason.
 
 - Searchable Help on every screen and F1, with ping and jitter hints. Ctrl+, opens Settings. Escape clears Help search before closing Help and returning focus. Help and Undo show at once, including with reduced motion.
@@ -18,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - About as the last Settings section: version, opt-in update checks at start, on opening About, and on Check now, with the last result and time for this session.
 
 ### Changed
+
+- Replace the five Home KPI tiles and the empty-state circle with compact data and text guidance. Show idle packet loss below the summary.
+- Replace the Continuous status pill with plain metadata. Keep a complete table row visible at minimum height and use the remaining space for scrolling.
+- Use the 16 px shell section gap and tabular numbers in page metadata. Keep the chart unchanged.
 
 - Escape clears Help search before closing Help, or dismisses Undo when Help is closed. Ctrl+Z leaves target removal unchanged while a text input has focus.
 - About uses the actions Show About and Hide About.

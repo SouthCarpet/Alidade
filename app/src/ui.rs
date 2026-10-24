@@ -82,7 +82,7 @@ impl App {
 
         let footer = crate::screens::help::opener(palette);
         let body = column![header, content, footer]
-            .spacing(SPACE.s6)
+            .spacing(SPACE.s4)
             .width(Fill)
             .height(Fill)
             .padding(SPACE.s6);

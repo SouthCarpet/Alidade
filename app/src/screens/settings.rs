@@ -459,6 +459,19 @@ pub fn body_scrollable_id() -> iced::widget::Id {
 // hardcoded `Palette::light()`.
 pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
     let body = column![
+        super::page_head(
+            palette,
+            "Settings",
+            format!(
+                "Measurement interval: {} min. Targets enabled: {}.",
+                app.settings.throughput_every.as_secs() / 60,
+                app.settings
+                    .targets
+                    .iter()
+                    .filter(|target| target.enabled)
+                    .count(),
+            )
+        ),
         section_title(palette, "Measurement"),
         interval_row(palette, app),
         metrics_row(palette, app),

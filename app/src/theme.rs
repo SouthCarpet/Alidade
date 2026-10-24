@@ -112,6 +112,62 @@ impl Palette {
         Duration::from_millis(MOTION.live.round().max(1.0) as u64)
     }
 
+    /// One tinted field for the Home facts, with no nested cards or shadow.
+    pub fn summary_field<'a, Message: 'a>(
+        &self,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let t = *self.theme;
+        container(content)
+            .padding(SPACE.s3)
+            .width(Length::Fill)
+            .style(move |_| {
+                container::Style::default()
+                    .background(col(t.accent_soft))
+                    .border(Border {
+                        color: col(t.border),
+                        width: 1.0,
+                        radius: radius(RADIUS.md),
+                    })
+            })
+            .into()
+    }
+
+    pub fn summary_ink(&self) -> Color {
+        col(self.theme.accent_soft_foreground)
+    }
+
+    /// The full missing-value reason remains available without wrapping its row.
+    pub fn reason_note<'a, Message: 'a>(
+        &self,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let t = *self.theme;
+        container(content)
+            .padding(SPACE.s2)
+            .max_width(SPACE.s6 * 24.0)
+            .style(move |_| design_tokens::styles::well_container(&t))
+            .into()
+    }
+
+    pub fn tooltip_delay() -> Duration {
+        Duration::from_secs_f32(MOTION.tooltip_delay / 1000.0)
+    }
+
+    pub fn activity_duration() -> Duration {
+        Duration::from_secs_f32(MOTION.base.min(MOTION.sequence_max) / 1000.0)
+    }
+
+    pub fn activity_offset() -> f32 {
+        MOTION.offset_enter
+    }
+
+    pub fn activity_progress(elapsed: Duration) -> f32 {
+        let progress =
+            (elapsed.as_secs_f32() / Self::activity_duration().as_secs_f32()).clamp(0.0, 1.0);
+        design_tokens::motion::ease_standard(progress)
+    }
+
     /// Recessed data well with a 1 px hairline and no shadow.
     pub fn well_frame<'a, Message: 'a>(
         &self,
