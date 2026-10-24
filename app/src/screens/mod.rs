@@ -203,11 +203,44 @@ fn hairline<'a>(palette: Palette) -> Element<'a, Message> {
     .into()
 }
 
-fn header_cell<'a>(palette: Palette, label: &'static str, portion: u16) -> Element<'a, Message> {
-    text(label)
+#[derive(Clone, Copy)]
+pub enum RoundColumn {
+    Time,
+    Down,
+    Up,
+    PingIdle,
+    PingLoad,
+    Jitter,
+    Loss,
+}
+
+impl RoundColumn {
+    pub fn alignment(self) -> iced::alignment::Horizontal {
+        match self {
+            Self::Time => iced::alignment::Horizontal::Left,
+            _ => iced::alignment::Horizontal::Right,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Time => "Time",
+            Self::Down => "Down",
+            Self::Up => "Up",
+            Self::PingIdle => "Ping idle",
+            Self::PingLoad => "Ping load",
+            Self::Jitter => "Jitter",
+            Self::Loss => "Loss",
+        }
+    }
+}
+
+fn header_cell<'a>(palette: Palette, column: RoundColumn, portion: u16) -> Element<'a, Message> {
+    text(column.label())
         .size(TYPE.xs)
         .font(font_medium())
         .color(palette.muted())
+        .align_x(column.alignment())
         .width(Length::FillPortion(portion))
         .into()
 }
@@ -216,33 +249,39 @@ fn time_cell<'a>(palette: Palette, value: String, portion: u16) -> Element<'a, M
     text(value)
         .size(TYPE.sm)
         .font(font_regular())
+        .align_x(RoundColumn::Time.alignment())
         .color(palette.text())
         .width(Length::FillPortion(portion))
         .into()
 }
 
-fn numeric_cell<'a>(palette: Palette, value: String, portion: u16) -> Element<'a, Message> {
+fn numeric_cell<'a>(
+    palette: Palette,
+    value: String,
+    portion: u16,
+    column: RoundColumn,
+) -> Element<'a, Message> {
     text(value)
         .size(TYPE.sm)
         .font(font_numeric())
         .color(palette.text())
-        .align_x(iced::alignment::Horizontal::Right)
+        .align_x(column.alignment())
         .width(Length::FillPortion(portion))
         .into()
 }
 
 fn table_header(palette: Palette) -> Element<'static, Message> {
     row![
-        header_cell(palette, "Time", 3),
+        header_cell(palette, RoundColumn::Time, 3),
         hairline(palette),
-        header_cell(palette, "Down", 2),
-        header_cell(palette, "Up", 2),
+        header_cell(palette, RoundColumn::Down, 2),
+        header_cell(palette, RoundColumn::Up, 2),
         hairline(palette),
-        header_cell(palette, "Ping idle", 2),
-        header_cell(palette, "Ping load", 2),
+        header_cell(palette, RoundColumn::PingIdle, 2),
+        header_cell(palette, RoundColumn::PingLoad, 2),
         hairline(palette),
-        header_cell(palette, "Jitter", 2),
-        header_cell(palette, "Loss", 2),
+        header_cell(palette, RoundColumn::Jitter, 2),
+        header_cell(palette, RoundColumn::Loss, 2),
     ]
     .spacing(SPACE.s2)
     .align_y(Alignment::Center)
@@ -254,14 +293,24 @@ fn table_row<'a>(palette: Palette, row: &RoundRow) -> Element<'a, Message> {
     row![
         time_cell(palette, format_time(row.started_at), 3),
         hairline(palette),
-        numeric_cell(palette, format_mbit(row.down_bps), 2),
-        numeric_cell(palette, format_mbit(row.up_bps), 2),
+        numeric_cell(palette, format_mbit(row.down_bps), 2, RoundColumn::Down),
+        numeric_cell(palette, format_mbit(row.up_bps), 2, RoundColumn::Up),
         hairline(palette),
-        numeric_cell(palette, format_ms(row.ping_idle_ms), 2),
-        numeric_cell(palette, format_ms(ping_load_ms(row)), 2),
+        numeric_cell(
+            palette,
+            format_ms(row.ping_idle_ms),
+            2,
+            RoundColumn::PingIdle
+        ),
+        numeric_cell(
+            palette,
+            format_ms(ping_load_ms(row)),
+            2,
+            RoundColumn::PingLoad
+        ),
         hairline(palette),
-        numeric_cell(palette, format_ms(row.jitter_ms), 2),
-        numeric_cell(palette, format_pct(row.loss_pct), 2),
+        numeric_cell(palette, format_ms(row.jitter_ms), 2, RoundColumn::Jitter),
+        numeric_cell(palette, format_pct(row.loss_pct), 2, RoundColumn::Loss),
     ]
     .spacing(SPACE.s2)
     .align_y(Alignment::Center)

@@ -32,6 +32,20 @@ Continuous has a 32 px title and one metadata line with its actual state and rec
 
 Ping monitor lists each enabled target in a row with current latency, average, minimum, maximum, jitter, loss, and a sparkline. Start begins dense probing. A target with no answer is drawn in the danger colour.
 
+### Plan 120 p3 review fixes
+
+Each Continuous series has a labelled line sample below its plot, with the same colour, width and dash pattern as its plotted line. Keys wrap within their plot width at the minimum window size. Two key rows fit inside the existing chart height, so table space is unchanged. Continuous and History share right-aligned numeric headers and values; Time stays left-aligned. Home latency scale ends use one decimal (`42.9 ms`), matching the summary; throughput keeps two decimals.
+
+Additive surface inventory:
+
+- `chart::SeriesSpec` holds a series label, panel, stroke and metric accessor.
+- `chart::series_specs()` supplies the exact same stroke to the plot and its key sample.
+- Chart key labels: Download, Upload, Idle, Load, Jitter, Packet loss.
+- `screens::RoundColumn` defines the seven shared table columns; `alignment()` gives the alignment used by headers and values, and the private `label()` gives header text.
+- `screens::drawing::Scale::end_label()` formats ms with one decimal and Mbit/s with two decimals.
+- Key layout rule: wrap entries within each plot and reserve two rows within the existing canvas height.
+- Regression evidence: `A:/tmp/120-p3-fix1/red.log`, `green.log`; captures in `A:/tmp/120-p3-fix1/after/`.
+
 ### History
 
 History filters stored rounds by From and To dates. It shows a count of rounds in range and a table of those rounds. Export CSV writes the filtered window.

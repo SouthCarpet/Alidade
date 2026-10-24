@@ -24,6 +24,49 @@ const DASH_PATTERNS: [&[f32]; 6] = [
     &[8.0, 4.0, 1.5, 4.0, 1.5, 4.0],
 ];
 
+#[derive(Clone, Copy)]
+pub struct SeriesSpec {
+    pub label: &'static str,
+    pub panel: usize,
+    pub stroke: Stroke<'static>,
+    metric: fn(&Point) -> Option<f64>,
+}
+
+/// One source for plot strokes and the labelled line samples below each plot.
+pub fn series_specs(palette: Palette) -> [SeriesSpec; 6] {
+    let labels = [
+        "Download",
+        "Upload",
+        "Idle",
+        "Load",
+        "Jitter",
+        "Packet loss",
+    ];
+    let panels = [0, 0, 1, 1, 1, 2];
+    let metrics: [fn(&Point) -> Option<f64>; 6] = [
+        |p| p.download_mbit,
+        |p| p.upload_mbit,
+        |p| p.ping_idle_ms,
+        |p| p.ping_load_ms,
+        |p| p.jitter_ms,
+        |p| p.loss_pct,
+    ];
+    std::array::from_fn(|index| SeriesSpec {
+        label: labels[index],
+        panel: panels[index],
+        metric: metrics[index],
+        stroke: Stroke {
+            line_dash: LineDash {
+                segments: DASH_PATTERNS[index],
+                offset: 0,
+            },
+            ..Stroke::default()
+                .with_width(2.0)
+                .with_color(palette.theme.chart[index].into())
+        },
+    })
+}
+
 /// The time-range chips used by the Continuous screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TimeRange {
@@ -334,38 +377,43 @@ impl LineChart {
             ["Throughput (Mbit/s)", "Latency (ms)", "Loss (%)"][panel],
             self.palette.muted(),
         );
-        let series: [fn(&Point) -> Option<f64>; 6] = [
-            |p| p.download_mbit,
-            |p| p.upload_mbit,
-            |p| p.ping_idle_ms,
-            |p| p.ping_load_ms,
-            |p| p.jitter_ms,
-            |p| p.loss_pct,
-        ];
-        let groups = [0, 0, 1, 1, 1, 2];
-        for (index, metric) in series
+        let mut key_x = plot.x;
+        let mut key_y = plot.y + plot.height + SPACE.s4;
+        for series in series_specs(self.palette)
             .into_iter()
-            .enumerate()
-            .filter(|(index, _)| groups[*index] == panel)
+            .filter(|s| s.panel == panel)
         {
             draw_series(
                 frame,
                 &self.points,
                 plot,
                 domain,
-                metric,
-                self.palette.theme.chart[index].into(),
-                DASH_PATTERNS[index],
+                series.metric,
+                series.stroke,
             );
+            let entry_width =
+                SPACE.s6 * 2.0 + SPACE.s1 + series.label.len() as f32 * TYPE.xs * LABEL_EM_PER_CHAR;
+            if key_x > plot.x && key_x + entry_width > plot.x + plot.width {
+                key_x = plot.x;
+                key_y += SPACE.s4 + SPACE.s1;
+            }
+            frame.stroke(
+                &Path::line(
+                    CanvasPoint::new(key_x, key_y),
+                    CanvasPoint::new(key_x + SPACE.s6 * 2.0, key_y),
+                ),
+                series.stroke,
+            );
+            draw_text(
+                frame,
+                series.label,
+                CanvasPoint::new(key_x + SPACE.s6 * 2.0 + SPACE.s1, key_y),
+                self.palette.muted(),
+                TYPE.xs,
+                alignment::Horizontal::Left,
+            );
+            key_x += entry_width + SPACE.s3;
         }
-        draw_text(
-            frame,
-            ["Download / Upload", "Idle / Load / Jitter", "Packet loss"][panel],
-            CanvasPoint::new(plot.x, plot.y + plot.height + SPACE.s4),
-            self.palette.muted(),
-            TYPE.xs,
-            alignment::Horizontal::Left,
-        );
     }
 }
 
@@ -405,7 +453,7 @@ fn plot_area(size: Size, left: (f64, f64), right: (f64, f64)) -> Plot {
     let x = label_margin(left);
     let y = SPACE.s4;
     let width = (size.width - x - label_margin(right)).max(0.0);
-    let height = (size.height - (SPACE.s4 + SPACE.s6)).max(0.0);
+    let height = (size.height - (SPACE.s4 + SPACE.s6 * 2.0 + SPACE.s2)).max(0.0);
     Plot {
         x,
         y,
@@ -463,8 +511,7 @@ fn draw_series(
     plot: Plot,
     scale: (f64, f64),
     metric: fn(&Point) -> Option<f64>,
-    color: Color,
-    dash: &'static [f32],
+    stroke: Stroke<'static>,
 ) {
     let path = Path::new(|builder| {
         let mut connected = false;
@@ -482,16 +529,7 @@ fn draw_series(
             }
         }
     });
-    frame.stroke(
-        &path,
-        Stroke {
-            line_dash: LineDash {
-                segments: dash,
-                offset: 0,
-            },
-            ..Stroke::default().with_width(2.0).with_color(color)
-        },
-    );
+    frame.stroke(&path, stroke);
 }
 
 fn draw_hover(

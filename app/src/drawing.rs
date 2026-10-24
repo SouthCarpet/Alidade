@@ -16,6 +16,14 @@ pub struct Scale {
 }
 
 impl Scale {
+    pub fn end_label(&self) -> String {
+        if self.unit == "ms" {
+            format!("{:.1} ms", self.domain().1)
+        } else {
+            format!("{:.2} {}", self.domain().1, self.unit)
+        }
+    }
+
     pub fn domain(&self) -> (f64, f64) {
         (0.0, self.values.into_iter().flatten().fold(0.0, f64::max))
     }
@@ -260,7 +268,7 @@ impl DiagramCanvas {
         );
         canvas_text(
             frame,
-            format!("{:.2} {}", scale.domain().1, scale.unit),
+            scale.end_label(),
             Point::new(end, y + SPACE.s3),
             self.palette.muted(),
             true,

@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Add labelled line samples with matching strokes to each Continuous plot. Align numeric table headers with their values in Continuous and History. Show Home latency scale ends with one decimal, like the summary.
+
 - Refresh the vendored Kaliber dark neutrals through the vendor sync script.
 - Replace the Settings unverified pill with plain AA-contrast state text.
 - Separate Continuous throughput, latency and loss plots so each unit has its own scale. Remove the synthetic download range.
