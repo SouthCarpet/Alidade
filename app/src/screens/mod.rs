@@ -13,6 +13,8 @@ use crate::theme::Palette;
 use crate::ui::{font_medium, font_numeric, font_regular};
 
 pub mod continuous;
+#[path = "../drawing.rs"]
+pub mod drawing;
 pub mod help;
 pub mod history;
 pub mod home;

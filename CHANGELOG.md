@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- A latest-round Home diagram with separate Mbit/s bars and ms marks, a text ping difference, and an honest missing-round reason. New results draw in over 220 ms; reduced motion shows the final marks at once.
+
 - Page heads on Home, Settings, and Continuous, with one metadata line per screen.
 - One Home summary with four measured facts, missing-value reasons, and full reasons on hover.
 - A Home activity line that enters by position and alpha, then stays still while the round runs. Reduced motion shows its final state at once.
@@ -23,9 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Refresh the vendored Kaliber dark neutrals through the vendor sync script.
+- Replace the Settings unverified pill with plain AA-contrast state text.
+- Separate Continuous throughput, latency and loss plots so each unit has its own scale. Remove the synthetic download range.
+- Keep fractional chart tick labels distinct on scales with a span below four units.
+
 - Replace the five Home KPI tiles and the empty-state circle with compact data and text guidance. Show idle packet loss below the summary.
 - Replace the Continuous status pill with plain metadata. Keep a complete table row visible at minimum height and use the remaining space for scrolling.
-- Use the 16 px shell section gap and tabular numbers in page metadata. Keep the chart unchanged.
+- Use the 16 px shell section gap and tabular numbers in page metadata.
 
 - Escape clears Help search before closing Help, or dismisses Undo when Help is closed. Ctrl+Z leaves target removal unchanged while a text input has focus.
 - About uses the actions Show About and Hide About.

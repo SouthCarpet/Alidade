@@ -73,9 +73,17 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
         ));
     }
     match &app.last_round {
-        Some(round) => sections.extend(round_sections(palette, round)),
-        None if app.last_round_error.is_none() => sections.push(empty_state(palette)),
-        None => {}
+        Some(round) => sections.extend(round_sections(
+            palette,
+            round,
+            super::drawing::view(app, palette),
+        )),
+        None => {
+            if app.last_round_error.is_none() {
+                sections.push(empty_state(palette));
+                sections.push(super::drawing::view(app, palette));
+            }
+        }
     }
     container(column(sections).spacing(SPACE.s4).width(Fill))
         .width(Fill)
@@ -98,7 +106,11 @@ fn round_metadata(round: Option<&LatestRound>) -> String {
     format!("{label}, {} UTC", super::format_time(round.started_at()))
 }
 
-fn round_sections<'a>(palette: Palette, round: &LatestRound) -> Vec<Element<'a, Message>> {
+fn round_sections<'a>(
+    palette: Palette,
+    round: &LatestRound,
+    diagram: Element<'a, Message>,
+) -> Vec<Element<'a, Message>> {
     let mut sections = Vec::new();
     if let Some(error) = round.persist_error() {
         sections.push(banner(
@@ -113,6 +125,7 @@ fn round_sections<'a>(palette: Palette, round: &LatestRound) -> Vec<Element<'a, 
         ));
     }
     sections.push(summary(palette, summary_facts(round)));
+    sections.push(diagram);
     let [_, _, _, _, loss] = round_values(round);
     sections.push(
         text(format!("Idle packet loss: {}", measurement_text(loss, "%")))
@@ -208,7 +221,7 @@ fn empty_state<'a>(palette: Palette) -> Element<'a, Message> {
             .size(TYPE.lg)
             .font(font_medium())
             .color(palette.text()),
-        text("No measurements are stored. Run a single test or start continuous mode.")
+        text("Run a single test or start continuous mode.")
             .size(TYPE.sm)
             .font(font_regular())
             .color(palette.muted()),

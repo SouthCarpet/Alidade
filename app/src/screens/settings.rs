@@ -339,7 +339,7 @@ pub(crate) fn build_probe(kind: TargetKind, host: String, port_text: &str) -> Pr
 
 /// Validate the pending "add a target" form into a real [`TargetSpec`]. A
 /// user-added target is not community-sourced preset data, so it is not
-/// marked `unverified` — that badge is specifically for the shipped
+/// marked `unverified`, as that state is specifically for the shipped
 /// game-server presets (see `raw_speedtest_targets_2026-08.md`).
 pub(crate) fn validate_new_target(form: &NewTargetForm) -> Result<TargetSpec, String> {
     let name = form.name.trim();
@@ -758,13 +758,13 @@ fn target_row<'a>(
         .style(palette.text_input())
         .on_input(move |text| Message::TargetFieldChanged(index, TargetField::Name(text)));
 
-    // The badge sits inside the Name column rather than as its own grid
+    // The state text sits inside the Name column rather than as its own grid
     // cell, so an unverified row still has the same six columns as every
     // other row (a seventh, inserted cell would misalign the header).
     let name_cell: Element<'a, Message> = if target.verified {
         name_input.into()
     } else {
-        row![name_input, unverified_badge(palette)]
+        row![name_input, unverified_text(palette)]
             .spacing(SPACE.s1)
             .align_y(Center)
             .into()
@@ -830,28 +830,19 @@ fn target_row<'a>(
 /// A game-server preset that is community-sourced data, not measured by
 /// this project (`rule_design_language.md`-adjacent honesty rule, same
 /// spirit as `home.rs`'s "never a fake number").
-fn unverified_badge<'a>(palette: Palette) -> Element<'a, Message> {
-    let background: Color = palette.theme.warning_soft.into();
-    let foreground: Color = palette.theme.warning.into();
-    let badge = container(
-        text("unverified")
-            .size(TYPE.xs)
-            .font(font_medium())
-            .color(foreground),
-    )
-    .padding([SPACE.s1, SPACE.s2])
-    .style(move |_| {
-        container::Style::default()
-            .background(background)
-            .border(Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: iced::border::radius(RADIUS.pill),
-            })
-    });
+pub fn unverified_status(palette: Palette) -> (&'static str, design_tokens::Rgba) {
+    ("unverified", palette.theme.text)
+}
+
+fn unverified_text<'a>(palette: Palette) -> Element<'a, Message> {
+    let (label, foreground) = unverified_status(palette);
+    let state = text(label)
+        .size(TYPE.xs)
+        .font(font_regular())
+        .color(Color::from(foreground));
 
     tooltip(
-        badge,
+        state,
         container(
             text("Community-sourced game-server target, not measured by this project. See vault/knowledge/raw/raw_speedtest_targets_2026-08.md.")
                 .size(TYPE.xs)

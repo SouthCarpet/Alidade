@@ -26,7 +26,7 @@ Additive surface inventory:
 
 ### Continuous
 
-Continuous has a 32 px title and one metadata line with its actual state and recent-round count. Read errors and export notices use that same line, with full details on hover. A notice adds Dismiss to the controls. This keeps alerts from taking table height. Pause, Resume, Export CSV and range buttons sit beside the head. The existing chart is unchanged. The compact head and shell gaps leave room for the newest-round table's header and at least one complete row; it fills the remaining height and has its own scroll gutter. History keeps its earlier fixed table height.
+Continuous has a 32 px title and one metadata line with its actual state and recent-round count. Read errors and export notices use that same line, with full details on hover. A notice adds Dismiss to the controls. This keeps alerts from taking table height. Pause, Resume, Export CSV and range buttons sit beside the head. Throughput (Mbit/s), latency and jitter (ms), and loss (%) have separate labelled plots and independently computed domains. Missing values break each series. The synthetic download band and the unlabelled cross-series average are removed. The compact head and shell gaps leave room for the newest-round table's header and at least one complete row; it fills the remaining height and has its own scroll gutter. History keeps its earlier fixed table height.
 
 ### Ping monitor
 
@@ -38,7 +38,77 @@ History filters stored rounds by From and To dates. It shows a count of rounds i
 
 ### Settings
 
-Settings has a 32 px title and one metadata line with the real interval and enabled-target count. Its editable body and scroll gutter are unchanged. It holds the measurement interval, which metrics run, the targets table (game-server presets may carry an unverified badge), daily data budget, theme, Windows autostart, and notifications. Notifications use a master switch and three threshold rows. Windows notification toasts are rate-limited. The in-app removal toast works on every supported desktop platform.
+Settings has a 32 px title and one metadata line with the real interval and enabled-target count. Its body keeps the scroll gutter. It holds the measurement interval, which metrics run, the targets table, daily data budget, theme, Windows autostart, and notifications. Community game-server presets show plain `unverified` state text in the normal text role, with a tooltip that explains its meaning. No pill or warning fill is used. The text is checked against the target well in both themes at 4.5:1 or higher. Notifications use a master switch and three threshold rows. Windows notification toasts are rate-limited. The in-app removal toast works on every supported desktop platform.
+
+## Latest-round diagram and draw-in (T3.2)
+
+The diagram sits on one compact sheet below the four-fact Home summary, with the shared raised fill and 1 px hairline. Download and upload are two bars on a zero-based Mbit/s scale. Idle and loaded ping are two marks on a separate zero-based ms scale. Each domain ends at that pair's largest real value. A measured zero stays zero; missing or invalid data creates no mark. All four values remain text in the summary. The signed difference is plain text below the scales, or a reason when either ping is missing. An absent round draws no geometry and gives one reason. A store read failure keeps its error reason, without claiming that no round was measured. No dimension line, bracket, arrow or callout stripe is used.
+
+Stored rows show their final state at boot. A new `RoundFinished` result starts three related moves: download, upload, then the ping pair. Starts are 0, 50 and 100 ms, with 120 ms per move and 220 ms total. Tokens supply the timing, easing and 8 px offset. Only x position and alpha change; values, lengths, scale domains, text and focus order are final immediately. The Windows reduced-motion preference is read when the result arrives. Reduced motion returns final frames at once and requests no animation subscription.
+
+Vendor refresh uses only `app/vendor/vendor-sync.ps1`; dark neutral lightness follows the current source tokens. No theme-port change was needed for those values.
+
+After captures: `A:/tmp/120-p3-diagram/after/manifest.json`, Home full/empty, Settings and Continuous, both themes, 1280 x 800 and actual minimum 1008 x 640 client size. Capture is PrintWindow of only the launched app, with fixed waits and seeded scratch data. Catalog scan: `A:/tmp/120-p3-diagram/slop-scan.md`.
+
+Additive surface inventory:
+
+- `screens::drawing` registers the new root `drawing.rs` through a path attribute, keeping the library entry point unchanged.
+- `Scale::unit` names Mbit/s or ms.
+- `Scale::values` holds two optional measured values.
+- `Scale::domain()` computes a zero-based domain from that pair only.
+- `Scale::fraction()` maps a real zero to zero without inventing a span.
+- `Diagram::speed` holds download and upload in Mbit/s.
+- `Diagram::latency` holds idle and loaded ping in ms.
+- `diagram()` returns data or the missing-round reason.
+- `Diagram::from_round()` reads either live or stored measurements.
+- `Diagram::difference_text()` formats the signed load-minus-idle change or a reason.
+- `Diagram::primitives()` emits only measured bars and marks.
+- `Primitive::Bar` holds a speed-series index and a final fraction.
+- `Primitive::Mark` holds a ping-series index and a final fraction.
+- `valid()` rejects non-finite and negative input without creating zeros.
+- `mean_present()` combines available loaded-ping phases by the existing summary rule.
+- `drawing::view()` keeps text and layout static while passing mark frames to the canvas.
+- `DiagramCanvas::data` holds the current diagram.
+- `DiagramCanvas::palette` holds the active token palette.
+- `DiagramCanvas::frames` holds the three position/alpha pairs.
+- `DiagramCanvas::draw()` draws the two labelled scale areas and the measured primitive list.
+- `DiagramCanvas::scale()` draws a unit title, row labels and a plain baseline.
+- `DiagramCanvas::mark()` paints final geometry with position/alpha only.
+- `canvas_text()` uses the tabular face for diagram labels.
+- `MeasurementDrawIn::started` holds the result-arrival instant.
+- `MeasurementDrawIn::reduced` holds the OS preference read at result arrival.
+- `MeasurementDrawIn::new()` starts the result sequence with injected time.
+- `MeasurementDrawIn::delays()` returns the three token-based start offsets.
+- `MeasurementDrawIn::duration()` returns the complete sequence length.
+- `MeasurementDrawIn::frames()` returns three bounded position/alpha pairs.
+- `MeasurementDrawIn::is_animating()` stops frame subscriptions at completion or at once with reduced motion.
+- `Palette::measurement_delays()` supplies the shared sequence-step token.
+- `Palette::measurement_sheet()` supplies the compact sheet material and hairline, using the shared 8 px padding step.
+- `App::measurement_draw_in` holds only the latest live-result sequence; boot starts with none.
+- Frame subscription rule: existing `ActivityTick` updates the same clock for activity and result motion. No new message is added.
+- `unverified_status()` supplies the plain state label and normal text color.
+- `unverified_text()` renders that state without a badge and preserves its explanation tooltip.
+- `chart_domains()` keeps throughput, latency and loss inputs separate.
+- `panel_bounds()` returns three disjoint plot areas at the existing chart height.
+- `LineChart::plots()` computes per-plot margins from its own domain.
+- `LineChart::draw_panel()` paints only series with the matching unit.
+- `ChartState::panel` keeps hover on the selected plot's unit scale.
+- Axis-label rule: spans below four units use two decimal places, with margins measured from those same labels; larger spans keep integer labels.
+- Diagram string group: Throughput (Mbit/s), Latency (ms), Download, Upload, Idle ping, Under load; endpoint units, ping change or missing reason, and No values in this round for an entirely missing pair.
+- Continuous string group: Throughput (Mbit/s), Latency (ms), Loss (%); Download / Upload, Idle / Load / Jitter, Packet loss.
+- Settings string group: `unverified` retains its existing community-data explanation.
+- Test helper `measurement_diagram::round()` supplies known live measurements, with no network or store dependency.
+- Test helper `measurement_diagram::ping()` supplies real `PingStats` for that fixture.
+- `latest_round_supplies_bars_marks_and_ping_difference_without_fake_values` checks the measured values and signed difference.
+- `missing_round_has_a_reason_and_no_diagram` checks the absent-round result.
+- `throughput_and_latency_use_independent_zero_based_domains_and_units` checks independent units and domains.
+- `draw_list_contains_only_two_speed_bars_and_two_latency_marks` checks the complete measured primitive list.
+- `missing_measurements_keep_gaps_and_explain_the_missing_difference` checks absent phases.
+- `reduced_motion_shows_all_three_final_moves_at_once` checks instant final frames.
+- `new_measurement_uses_three_moves_fifty_ms_apart_and_finishes_by_320_ms` checks the sequence starts and bound.
+- `unverified_target_stays_plain_text_with_aa_contrast_in_both_themes` checks the label and AA contrast.
+- `continuous_chart_never_maps_loss_percent_onto_the_latency_scale` checks the loss/latency boundary and disjoint plots.
+- `the_loss_axis_keeps_fractional_percent_ticks_distinct` checks readable quarter-percent tick labels.
 
 ## Home composition and motion (plan 120 p3)
 
@@ -50,7 +120,7 @@ The activity state changes only position and alpha over the base token (120 ms),
 
 Missing summary reasons stay on one line, with whitespace normalized for display and clipping at the available width. Hover shows the complete original reason in a flat note after the 500 ms tooltip token. No numeric value or unit is substituted for a missing measurement. A stored speed without old load details says so. The summary is a four-element array; loss remains outside it. The old KPI renderer, tracking helper, gauge, and two gauge-only tests are removed; the measurement-formatting tests remain.
 
-Current audit limits block a full visual PASS: the existing light Settings unverified badge has 4.2894:1 text contrast (SLOP-COLOR-05), and vendor-check reports drift in the shared base tokens. The current brief permits Settings head changes only, excludes vendor writes, and forbids palette changes. Evidence is `A:/tmp/120-p3-home/contrast.md`; these issues need controller work before promotion. The unverified pill is also DECOR-06 watch, and the Continuous chart/register skeleton remains LAYOUT-07 watch. No chart or diagram conformance is claimed here; T3.2 owns that step.
+The T3.1 audit recorded a 4.2894:1 light Settings badge (SLOP-COLOR-05), vendor drift and a DECOR-06 pill watch. That task allowed only Settings head changes. T3.2 replaces the pill with plain text, refreshes the vendor tokens, and adds the diagram and separate Continuous plots described above. The chart/register skeleton remains LAYOUT-07 watch. T3.1 evidence stays in `A:/tmp/120-p3-home/contrast.md`; current after-image evidence is under `A:/tmp/120-p3-diagram/`.
 
 Additive surface inventory, in addition to the boot inventory above:
 

@@ -150,6 +150,45 @@ impl ActivityLine {
     }
 }
 
+/// Three result groups move as fixed geometry; no intermediate values are shown.
+#[derive(Debug, Clone)]
+pub struct MeasurementDrawIn {
+    started: Instant,
+    reduced: bool,
+}
+
+impl MeasurementDrawIn {
+    pub fn new(started: Instant, reduced: bool) -> Self {
+        Self { started, reduced }
+    }
+
+    pub fn delays(&self) -> [Duration; 3] {
+        Palette::measurement_delays()
+    }
+
+    pub fn duration(&self) -> Duration {
+        self.delays()[2] + Palette::activity_duration()
+    }
+
+    pub fn frames(&self, at: Instant) -> [(f32, f32); 3] {
+        let elapsed = at.saturating_duration_since(self.started);
+        self.delays().map(|delay| {
+            let progress = if self.reduced {
+                1.0
+            } else if elapsed < delay {
+                0.0
+            } else {
+                Palette::activity_progress(elapsed - delay)
+            };
+            ((progress - 1.0) * Palette::activity_offset(), progress)
+        })
+    }
+
+    pub fn is_animating(&self, at: Instant) -> bool {
+        !self.reduced && at.saturating_duration_since(self.started) < self.duration()
+    }
+}
+
 #[cfg(windows)]
 fn reduced_motion() -> bool {
     #[link(name = "user32")]
@@ -305,6 +344,7 @@ pub struct App {
     pub last_round_error: Option<String>,
     pub activity: ActivityLine,
     pub activity_at: Instant,
+    pub measurement_draw_in: Option<MeasurementDrawIn>,
     pub scheduler: Scheduler,
     pub continuous_running: bool,
     pub continuous_paused: bool,
@@ -440,6 +480,7 @@ impl App {
             last_round_error,
             activity: ActivityLine::new(reduced_motion()),
             activity_at: Instant::now(),
+            measurement_draw_in: None,
             scheduler,
             continuous_running: false,
             continuous_paused: false,
@@ -514,7 +555,12 @@ impl App {
 
     /// Window, OS theme, and keyboard events stay subscribed on every screen.
     pub fn subscription(&self) -> Subscription<Message> {
-        let activity = if self.activity.is_animating(self.activity_at) {
+        let activity = if self.activity.is_animating(self.activity_at)
+            || self
+                .measurement_draw_in
+                .as_ref()
+                .is_some_and(|motion| motion.is_animating(self.activity_at))
+        {
             window::frames().map(Message::ActivityTick)
         } else {
             Subscription::none()
@@ -871,6 +917,8 @@ impl App {
         self.scheduler.record_bytes(SystemTime::now(), bytes);
         self.notify_thresholds(&outcome.result);
         self.last_round = Some(LatestRound::Live(Box::new(outcome)));
+        self.activity_at = Instant::now();
+        self.measurement_draw_in = Some(MeasurementDrawIn::new(self.activity_at, reduced_motion()));
         self.last_round_error = None;
         load_chart_task()
     }
@@ -1705,6 +1753,7 @@ mod tests {
             last_round_error: None,
             activity: ActivityLine::new(true),
             activity_at: Instant::now(),
+            measurement_draw_in: None,
             scheduler,
             continuous_running: false,
             continuous_paused: false,

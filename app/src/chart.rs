@@ -1,4 +1,4 @@
-//! The Continuous screen's honest, dual-axis measurement chart.
+//! The Continuous screen's measurement chart, with one plot per unit.
 //!
 //! `None` is deliberately carried from storage to the path builder. A
 //! missing measurement starts a new sub-path instead of becoming a zero at
@@ -152,43 +152,52 @@ impl LineChart {
         }
     }
 
-    fn throughput_values(&self) -> Vec<f64> {
-        self.points
-            .iter()
-            .flat_map(|point| [point.download_mbit, point.upload_mbit])
-            .flatten()
-            .collect()
+    fn plots(&self, size: Size) -> [Plot; 3] {
+        let domains = chart_domains(&self.points);
+        std::array::from_fn(|index| {
+            let bounds = panel_bounds(size)[index];
+            let mut plot = plot_area(bounds.size(), domains[index], (0.0, 0.0));
+            plot.x += bounds.x;
+            plot
+        })
     }
+}
 
-    fn latency_values(&self) -> Vec<f64> {
-        self.points
-            .iter()
-            .flat_map(|point| {
-                [
-                    point.ping_idle_ms,
-                    point.ping_load_ms,
-                    point.jitter_ms,
-                    point.loss_pct,
-                ]
-            })
-            .flatten()
-            .collect()
-    }
+/// Throughput, latency and loss domains are computed from their own units only.
+pub fn chart_domains(points: &[Point]) -> [(f64, f64); 3] {
+    let speeds: Vec<_> = points
+        .iter()
+        .flat_map(|p| [p.download_mbit, p.upload_mbit])
+        .flatten()
+        .collect();
+    let latency: Vec<_> = points
+        .iter()
+        .flat_map(|p| [p.ping_idle_ms, p.ping_load_ms, p.jitter_ms])
+        .flatten()
+        .collect();
+    let loss: Vec<_> = points.iter().filter_map(|p| p.loss_pct).collect();
+    [
+        y_scale(&speeds, false),
+        y_scale(&latency, true),
+        y_scale(&loss, true),
+    ]
+}
 
-    /// The plot area for a canvas of `size`, with side margins that fit the
-    /// widest axis label of each scale.
-    fn plot(&self, size: Size) -> Plot {
-        plot_area(
-            size,
-            y_scale(&self.throughput_values(), false),
-            y_scale(&self.latency_values(), true),
+/// Three disjoint plots keep the existing chart height and table space.
+pub fn panel_bounds(size: Size) -> [Rectangle; 3] {
+    let width = ((size.width - SPACE.s6 * 2.0) / 3.0).max(0.0);
+    std::array::from_fn(|index| {
+        Rectangle::new(
+            CanvasPoint::new(index as f32 * (width + SPACE.s6), 0.0),
+            Size::new(width, size.height),
         )
-    }
+    })
 }
 
 #[derive(Debug, Default)]
 pub struct ChartState {
     hovered: Option<usize>,
+    panel: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -225,18 +234,23 @@ impl<Message> canvas::Program<Message> for LineChart {
             return None;
         }
 
-        let plot = self.plot(bounds.size());
-        let hovered = cursor.position_in(bounds).and_then(|position| {
-            if plot.rectangle().contains(position) {
-                nearest_point(&self.points, plot, position.x)
-            } else {
-                None
-            }
+        let hit = cursor.position_in(bounds).and_then(|position| {
+            self.plots(bounds.size())
+                .into_iter()
+                .enumerate()
+                .find_map(|(index, plot)| {
+                    plot.rectangle()
+                        .contains(position)
+                        .then_some((index, plot, position.x))
+                })
         });
-        if state.hovered == hovered {
+        let hovered = hit.and_then(|(_, plot, x)| nearest_point(&self.points, plot, x));
+        let panel = hit.map_or(state.panel, |(index, _, _)| index);
+        if state.hovered == hovered && state.panel == panel {
             None
         } else {
             state.hovered = hovered;
+            state.panel = panel;
             Some(Action::request_redraw())
         }
     }
@@ -250,101 +264,23 @@ impl<Message> canvas::Program<Message> for LineChart {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let plot = self.plot(frame.size());
-        let theme = *self.palette.theme;
-        let throughput = self.throughput_values();
-        let latency = self.latency_values();
-        let throughput_scale = y_scale(&throughput, false);
-        let latency_scale = y_scale(&latency, true);
-
-        // The chart itself is a recessed well by colour alone: no shadow is
-        // attached to this rectangle.
-        frame.fill_rectangle(
-            CanvasPoint::new(plot.x, plot.y),
-            Size::new(plot.width, plot.height),
-            self.palette.well(),
-        );
-        frame.stroke_rectangle(
-            CanvasPoint::new(plot.x, plot.y),
-            Size::new(plot.width, plot.height),
-            Stroke::default()
-                .with_width(1.0)
-                .with_color(theme.border.into()),
-        );
-
-        draw_grid(&mut frame, plot, theme.chart_grid.into());
-        draw_axes(
-            &mut frame,
-            plot,
-            throughput_scale,
-            latency_scale,
-            self.palette.muted(),
-        );
-
-        // Series one is a min/max envelope around each available download
-        // measurement. Its alpha is the token-defined chart band alpha.
-        draw_download_band(
-            &mut frame,
-            &self.points,
-            plot,
-            throughput_scale,
-            theme.chart[0].into(),
-            theme.chart_band_alpha,
-        );
-
-        if !throughput.is_empty() {
-            let average = throughput.iter().sum::<f64>() / throughput.len() as f64;
-            let y = y_for(average, throughput_scale, plot);
-            frame.stroke(
-                &Path::line(
-                    CanvasPoint::new(plot.x, y),
-                    CanvasPoint::new(plot.x + plot.width, y),
-                ),
-                Stroke {
-                    line_dash: LineDash {
-                        segments: &[4.0, 3.0],
-                        offset: 0,
-                    },
-                    ..Stroke::default()
-                        .with_width(1.0)
-                        .with_color(self.palette.muted())
-                },
-            );
+        let plots = self.plots(frame.size());
+        let domains = chart_domains(&self.points);
+        for index in 0..3 {
+            self.draw_panel(&mut frame, plots[index], domains[index], index);
         }
-
-        let series: [fn(&Point) -> Option<f64>; 6] = [
-            |point| point.download_mbit,
-            |point| point.upload_mbit,
-            |point| point.ping_idle_ms,
-            |point| point.ping_load_ms,
-            |point| point.jitter_ms,
-            |point| point.loss_pct,
-        ];
-        for (index, metric) in series.into_iter().enumerate() {
-            let scale = if index < 2 {
-                throughput_scale
-            } else {
-                latency_scale
-            };
-            draw_series(
-                &mut frame,
-                &self.points,
-                plot,
-                scale,
-                metric,
-                theme.chart[index].into(),
-                DASH_PATTERNS[index],
-            );
-        }
-
         if let Some(index) = state.hovered.filter(|index| *index < self.points.len()) {
+            let point = &self.points[index];
             draw_hover(
                 &mut frame,
-                &self.points[index],
+                point,
                 index,
                 &self.points,
-                plot,
-                throughput_scale,
+                plots[state.panel],
+                (
+                    domains[state.panel],
+                    [point.download_mbit, point.ping_idle_ms, point.loss_pct][state.panel],
+                ),
                 self.palette,
             );
         }
@@ -358,10 +294,11 @@ impl<Message> canvas::Program<Message> for LineChart {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if cursor
-            .position_in(bounds)
-            .is_some_and(|position| self.plot(bounds.size()).rectangle().contains(position))
-        {
+        if cursor.position_in(bounds).is_some_and(|position| {
+            self.plots(bounds.size())
+                .iter()
+                .any(|plot| plot.rectangle().contains(position))
+        }) {
             mouse::Interaction::Crosshair
         } else {
             mouse::Interaction::default()
@@ -369,18 +306,90 @@ impl<Message> canvas::Program<Message> for LineChart {
     }
 }
 
+impl LineChart {
+    fn draw_panel(
+        &self,
+        frame: &mut Frame<Renderer>,
+        plot: Plot,
+        domain: (f64, f64),
+        panel: usize,
+    ) {
+        frame.fill_rectangle(
+            CanvasPoint::new(plot.x, plot.y),
+            Size::new(plot.width, plot.height),
+            self.palette.well(),
+        );
+        frame.stroke_rectangle(
+            CanvasPoint::new(plot.x, plot.y),
+            Size::new(plot.width, plot.height),
+            Stroke::default()
+                .with_width(1.0)
+                .with_color(self.palette.border()),
+        );
+        draw_grid(frame, plot, self.palette.theme.chart_grid.into());
+        draw_axes(
+            frame,
+            plot,
+            domain,
+            ["Throughput (Mbit/s)", "Latency (ms)", "Loss (%)"][panel],
+            self.palette.muted(),
+        );
+        let series: [fn(&Point) -> Option<f64>; 6] = [
+            |p| p.download_mbit,
+            |p| p.upload_mbit,
+            |p| p.ping_idle_ms,
+            |p| p.ping_load_ms,
+            |p| p.jitter_ms,
+            |p| p.loss_pct,
+        ];
+        let groups = [0, 0, 1, 1, 1, 2];
+        for (index, metric) in series
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| groups[*index] == panel)
+        {
+            draw_series(
+                frame,
+                &self.points,
+                plot,
+                domain,
+                metric,
+                self.palette.theme.chart[index].into(),
+                DASH_PATTERNS[index],
+            );
+        }
+        draw_text(
+            frame,
+            ["Download / Upload", "Idle / Load / Jitter", "Packet loss"][panel],
+            CanvasPoint::new(plot.x, plot.y + plot.height + SPACE.s4),
+            self.palette.muted(),
+            TYPE.xs,
+            alignment::Horizontal::Left,
+        );
+    }
+}
+
 /// Text width is estimated at 0.62 em per digit. The numeric face is
 /// tabular, so one estimate per character holds for every digit.
 const LABEL_EM_PER_CHAR: f32 = 0.62;
 
-fn axis_label(value: f64) -> String {
-    format!("{value:.0}")
+fn axis_label(value: f64, scale: (f64, f64)) -> String {
+    if scale.1 - scale.0 < 4.0 {
+        format!("{value:.2}")
+    } else {
+        format!("{value:.0}")
+    }
 }
 
 /// The widest of the five tick labels of `scale`, in characters.
 fn widest_label_chars(scale: (f64, f64)) -> usize {
     (0..=4)
-        .map(|step| axis_label(scale.0 + (scale.1 - scale.0) * (f64::from(step) / 4.0)))
+        .map(|step| {
+            axis_label(
+                scale.0 + (scale.1 - scale.0) * (f64::from(step) / 4.0),
+                scale,
+            )
+        })
         .map(|label| label.chars().count())
         .max()
         .unwrap_or(1)
@@ -421,90 +430,31 @@ fn draw_grid(frame: &mut Frame<Renderer>, plot: Plot, color: Color) {
 fn draw_axes(
     frame: &mut Frame<Renderer>,
     plot: Plot,
-    left: (f64, f64),
-    right: (f64, f64),
+    domain: (f64, f64),
+    unit: &str,
     color: Color,
 ) {
     for step in 0..=4 {
         let fraction = step as f64 / 4.0;
         let y = plot.y + plot.height * (1.0 - fraction) as f32;
-        let left_value = left.0 + ((left.1 - left.0) * fraction);
-        let right_value = right.0 + ((right.1 - right.0) * fraction);
+        let left_value = domain.0 + ((domain.1 - domain.0) * fraction);
         draw_text(
             frame,
-            axis_label(left_value),
+            axis_label(left_value, domain),
             CanvasPoint::new(plot.x - SPACE.s2, y),
             color,
             TYPE.xs,
             alignment::Horizontal::Right,
         );
-        draw_text(
-            frame,
-            axis_label(right_value),
-            CanvasPoint::new(plot.x + plot.width + SPACE.s2, y),
-            color,
-            TYPE.xs,
-            alignment::Horizontal::Left,
-        );
     }
     draw_text(
         frame,
-        "Mbit/s",
+        unit,
         CanvasPoint::new(plot.x, plot.y - SPACE.s2),
         color,
         TYPE.xs,
         alignment::Horizontal::Left,
     );
-    draw_text(
-        frame,
-        "ms",
-        CanvasPoint::new(plot.x + plot.width, plot.y - SPACE.s2),
-        color,
-        TYPE.xs,
-        alignment::Horizontal::Right,
-    );
-}
-
-fn draw_download_band(
-    frame: &mut Frame<Renderer>,
-    points: &[Point],
-    plot: Plot,
-    scale: (f64, f64),
-    color: Color,
-    alpha: f32,
-) {
-    let mut run: Vec<(f32, f32, f32)> = Vec::new();
-    for (index, point) in points.iter().enumerate() {
-        if let Some(value) = point.download_mbit {
-            let x = x_for(points, index, plot);
-            run.push((
-                x,
-                y_for(value * 1.12, scale, plot),
-                y_for(value * 0.88, scale, plot),
-            ));
-        } else {
-            fill_band_run(frame, &run, color, alpha);
-            run.clear();
-        }
-    }
-    fill_band_run(frame, &run, color, alpha);
-}
-
-fn fill_band_run(frame: &mut Frame<Renderer>, run: &[(f32, f32, f32)], color: Color, alpha: f32) {
-    if run.len() < 2 {
-        return;
-    }
-    let path = Path::new(|builder| {
-        builder.move_to(CanvasPoint::new(run[0].0, run[0].1));
-        for (x, upper, _) in run.iter().skip(1) {
-            builder.line_to(CanvasPoint::new(*x, *upper));
-        }
-        for (x, _, lower) in run.iter().rev() {
-            builder.line_to(CanvasPoint::new(*x, *lower));
-        }
-        builder.close();
-    });
-    frame.fill(&path, Color { a: alpha, ..color });
 }
 
 fn draw_series(
@@ -550,7 +500,7 @@ fn draw_hover(
     index: usize,
     points: &[Point],
     plot: Plot,
-    throughput_scale: (f64, f64),
+    metric: ((f64, f64), Option<f64>),
     palette: Palette,
 ) {
     let x = x_for(points, index, plot);
@@ -562,8 +512,8 @@ fn draw_hover(
         ),
         Stroke::default().with_width(1.0).with_color(crosshair),
     );
-    if let Some(download) = point.download_mbit {
-        let y = y_for(download, throughput_scale, plot);
+    if let Some(value) = metric.1 {
+        let y = y_for(value, metric.0, plot);
         frame.stroke(
             &Path::line(
                 CanvasPoint::new(plot.x, y),
@@ -714,6 +664,14 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod axis_margin_tests {
     use super::*;
+
+    #[test]
+    fn the_loss_axis_keeps_fractional_percent_ticks_distinct() {
+        // R34(e): the empty-loss domain is 0..1%, so quarter-percent ticks must stay distinct.
+        assert_eq!(axis_label(0.25, (0.0, 1.0)), "0.25");
+        assert_eq!(axis_label(0.5, (0.0, 1.0)), "0.50");
+        assert_eq!(axis_label(0.75, (0.0, 1.0)), "0.75");
+    }
 
     #[test]
     fn the_left_margin_grows_with_the_widest_label() {

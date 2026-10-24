@@ -168,6 +168,24 @@ impl Palette {
         design_tokens::motion::ease_standard(progress)
     }
 
+    pub fn measurement_delays() -> [Duration; 3] {
+        let step = Duration::from_millis(MOTION.sequence_step.round() as u64);
+        [Duration::ZERO, step, step * 2]
+    }
+
+    /// Compact data sheet for the two measurement scales.
+    pub fn measurement_sheet<'a, Message: 'a>(
+        &self,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let t = *self.theme;
+        container(content)
+            .padding(SPACE.s2)
+            .width(Length::Fill)
+            .style(move |_| design_tokens::styles::card_container(&t))
+            .into()
+    }
+
     /// Recessed data well with a 1 px hairline and no shadow.
     pub fn well_frame<'a, Message: 'a>(
         &self,

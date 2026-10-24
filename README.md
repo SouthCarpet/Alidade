@@ -40,9 +40,17 @@ Home reads stored history from the database selected by `--db`, or the normal ap
 
 Home has a page title and one line with the round mode and UTC time. One tinted summary shows download, upload, idle ping, and ping under load. Idle packet loss is supporting text below it. Missing measurements show a reason instead of a zero; the full reason is available on hover. An empty store has text guidance and no placeholder illustration.
 
+Below the summary, the latest round has two labelled scales: download and upload bars in Mbit/s, and idle and loaded ping marks in ms. Each scale starts at zero and ends at its own largest measured value. A measured zero stays zero; a missing value has no mark. The ping change is also printed as text. All four values remain in the summary. With no round, Home gives a one-line reason and draws no diagram. Speed and latency have no dimension lines or arrows.
+
+A newly finished round moves and fades in its two speed bars and ping marks in three steps, 50 ms apart, for 220 ms in total. Geometry and text use the final measured values from the first frame. Reduced motion shows the final marks at once. Stored history does not animate at start.
+
 While a round runs, Home shows **Measuring** and a 2 px activity line. The line enters by position and alpha over the 120 ms token, capped at 320 ms, then stays still until the round ends. Its length does not estimate completion. The line has no geometry while idle, and its layout space stays reserved. Windows animation preference is read at start and before each round. With reduced motion, an unreadable preference, or a non-Windows platform, the final line shows at once. Text and focus stay the same.
 
-Settings and Continuous use the same page-title scale and one metadata line. Continuous uses plain state text. Read errors and export notices use that line, with full details on hover and a Dismiss action for notices. Its compact head leaves room for the table header and a complete row at the minimum window size; more rows remain available in the table's scroll area. The chart itself is unchanged in this step.
+Settings and Continuous use the same page-title scale and one metadata line. Continuous uses plain state text. Read errors and export notices use that line, with full details on hover and a Dismiss action for notices. Its compact head leaves room for the table header and a complete row at the minimum window size; more rows remain available in the table's scroll area. Its chart keeps throughput (Mbit/s), latency and jitter (ms), and loss (%) in separate labelled plots. Missing values break a series. The chart draws measured values only, without a synthetic download range.
+
+Settings shows an unverified community target as plain `unverified` text in the normal text role. It meets 4.5:1 contrast in both themes. Dark surfaces use the current, darker Kaliber neutral tokens.
+
+Chart axes use two decimal places when their span is below four units, so fractional percent ticks stay distinct. Wider scales keep compact integer labels. Axis margins use the displayed labels.
 
 The header shows the Alidade mark and name. Settings is the last tab. The header theme switch chooses Light or Dark from the theme in use. Settings > Appearance has Light, Dark, and System segments. System is the default and follows Windows. Both controls save the same `theme` preference in `ui-settings.toml`, beside `settings.toml`.
 
