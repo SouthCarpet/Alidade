@@ -14,20 +14,20 @@ use crate::theme::Palette;
 use crate::update;
 
 pub fn font_regular() -> Font {
-    Font::with_name("Fira Sans")
+    design_tokens::fonts::regular()
 }
 
 pub fn font_medium() -> Font {
     Font {
         weight: iced::font::Weight::Medium,
-        ..Font::with_name("Fira Sans")
+        ..design_tokens::fonts::regular()
     }
 }
 
 /// The vendored number face has tabular figures and a plain zero.
 /// iced cannot select OpenType features on an individual text run.
 pub fn font_numeric() -> Font {
-    Font::with_name("Fira Sans Tabular")
+    design_tokens::fonts::numeric(iced::font::Weight::Normal)
 }
 
 impl App {

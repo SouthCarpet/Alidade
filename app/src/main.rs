@@ -8,23 +8,6 @@ use alidade_app::startup::{self, StartupFlags};
 use alidade_app::state::App;
 use alidade_app::ui::font_regular;
 
-const FONT_SANS_REGULAR_BYTES: &[u8] =
-    include_bytes!("../vendor/assets/fonts/fira-sans/FiraSans-Regular.ttf");
-const FONT_SANS_MEDIUM_BYTES: &[u8] =
-    include_bytes!("../vendor/assets/fonts/fira-sans/FiraSans-Medium.ttf");
-const FONT_SANS_SEMIBOLD_BYTES: &[u8] =
-    include_bytes!("../vendor/assets/fonts/fira-sans/FiraSans-SemiBold.ttf");
-const FONT_SANS_BOLD_BYTES: &[u8] =
-    include_bytes!("../vendor/assets/fonts/fira-sans/FiraSans-Bold.ttf");
-const FONT_TABULAR_REGULAR_BYTES: &[u8] =
-    include_bytes!("../vendor/assets/fonts/fira-sans/FiraSansTabular-Regular.ttf");
-const FONT_TABULAR_MEDIUM_BYTES: &[u8] =
-    include_bytes!("../vendor/assets/fonts/fira-sans/FiraSansTabular-Medium.ttf");
-const FONT_TABULAR_SEMIBOLD_BYTES: &[u8] =
-    include_bytes!("../vendor/assets/fonts/fira-sans/FiraSansTabular-SemiBold.ttf");
-const FONT_TABULAR_BOLD_BYTES: &[u8] =
-    include_bytes!("../vendor/assets/fonts/fira-sans/FiraSansTabular-Bold.ttf");
-
 fn main() -> iced::Result {
     let flags: StartupFlags = startup::parse(std::env::args().skip(1));
 
@@ -39,7 +22,7 @@ fn main() -> iced::Result {
     let window = flags.window;
     let boot_flags = flags.clone();
 
-    iced::application(
+    let application = iced::application(
         move || App::boot(boot_flags.clone()),
         App::update,
         App::view,
@@ -51,14 +34,9 @@ fn main() -> iced::Result {
     // decides between hiding and a real close.
     .exit_on_close_request(false)
     .subscription(App::subscription)
-    .font(FONT_SANS_REGULAR_BYTES)
-    .font(FONT_SANS_MEDIUM_BYTES)
-    .font(FONT_SANS_SEMIBOLD_BYTES)
-    .font(FONT_SANS_BOLD_BYTES)
-    .font(FONT_TABULAR_REGULAR_BYTES)
-    .font(FONT_TABULAR_MEDIUM_BYTES)
-    .font(FONT_TABULAR_SEMIBOLD_BYTES)
-    .font(FONT_TABULAR_BOLD_BYTES)
-    .default_font(font_regular())
-    .run()
+    .default_font(font_regular());
+    design_tokens::fonts::FILES
+        .into_iter()
+        .fold(application, |app, bytes| app.font(bytes))
+        .run()
 }
