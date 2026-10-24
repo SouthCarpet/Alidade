@@ -16,7 +16,7 @@ const TOPICS: [(&str, &str); 4] = [
     ("Ping idle", "Round-trip time while the link is not running a throughput test. Lower values mean a faster response."),
     ("Ping under load", "Round-trip time while download or upload is running. A rise from idle ping shows delay while the link is busy."),
     ("Jitter", "Variation between successive ping times, in milliseconds. Lower jitter means more consistent response times."),
-    ("Shortcuts", "F1 opens Help. Ctrl+, opens Settings. Escape closes Help and returns focus. Ctrl+Z restores a removed target while its 10-second toast is shown."),
+    ("Shortcuts", "F1 opens Help. Ctrl+, opens Settings. Escape clears Help search first, then closes Help and returns focus. With Help closed, Escape dismisses Undo. Ctrl+Z outside text inputs restores a removed target while its 10-second toast is shown."),
 ];
 
 pub(crate) fn search_id() -> iced::widget::Id {
@@ -83,6 +83,42 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
 // The underlying screen stays mounted while the panel is open.
 pub(crate) fn capture_focus() -> Task<Option<usize>> {
     iced::advanced::widget::operate(operation::focusable::count()).map(|count| count.focused)
+}
+
+// iced visits a text input immediately before its Focusable state, even without an ID.
+#[derive(Default)]
+struct TextInputFocus {
+    input_bounds: Option<Rectangle>,
+    focused: bool,
+}
+impl Operation<bool> for TextInputFocus {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<bool>)) {
+        operate(self);
+    }
+    fn text_input(
+        &mut self,
+        _: Option<&iced::widget::Id>,
+        bounds: Rectangle,
+        _: &mut dyn operation::TextInput,
+    ) {
+        self.input_bounds = Some(bounds);
+    }
+    fn focusable(
+        &mut self,
+        _: Option<&iced::widget::Id>,
+        bounds: Rectangle,
+        state: &mut dyn Focusable,
+    ) {
+        if self.input_bounds.take() == Some(bounds) && state.is_focused() {
+            self.focused = true;
+        }
+    }
+    fn finish(&self) -> operation::Outcome<bool> {
+        operation::Outcome::Some(self.focused)
+    }
+}
+pub(crate) fn text_input_focused() -> Task<bool> {
+    iced::advanced::widget::operate(TextInputFocus::default())
 }
 
 struct RestoreFocus {
@@ -305,5 +341,40 @@ mod tests {
         let operation: &mut dyn Operation<()> = &mut restore;
         operation.focusable(None, Rectangle::default(), &mut control);
         assert!(!control.is_focused());
+    }
+}
+
+#[cfg(test)]
+mod shortcut_focus_tests {
+    use super::*;
+    type InputState = iced::widget::text_input::State<
+        <iced::Renderer as iced::advanced::text::Renderer>::Paragraph,
+    >;
+
+    #[test]
+    fn focused_text_input_without_id_is_detected() {
+        let mut input = InputState::new();
+        Focusable::focus(&mut input);
+        let mut check = TextInputFocus::default();
+        check.text_input(None, Rectangle::default(), &mut input);
+        check.focusable(None, Rectangle::default(), &mut input);
+        assert!(matches!(check.finish(), operation::Outcome::Some(true)));
+    }
+
+    #[test]
+    fn unfocused_text_input_does_not_block_undo() {
+        let mut input = InputState::new();
+        let mut check = TextInputFocus::default();
+        check.text_input(None, Rectangle::default(), &mut input);
+        check.focusable(None, Rectangle::default(), &mut input);
+        assert!(matches!(check.finish(), operation::Outcome::Some(false)));
+    }
+
+    #[test]
+    fn focused_non_input_control_does_not_block_undo() {
+        let mut control = OpenerFocus(true);
+        let mut check = TextInputFocus::default();
+        check.focusable(None, Rectangle::default(), &mut control);
+        assert!(matches!(check.finish(), operation::Outcome::Some(false)));
     }
 }

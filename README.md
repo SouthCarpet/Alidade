@@ -40,13 +40,13 @@ The desktop app uses vendored Kaliber design tokens 0.10.0, with light and dark 
 
 The header shows the Alidade mark and name. Settings is the last tab. The header theme switch chooses Light or Dark from the theme in use. Settings > Appearance has Light, Dark, and System segments. System is the default and follows Windows. Both controls save the same `theme` preference in `ui-settings.toml`, beside `settings.toml`.
 
-Settings > About shows the app version and the time and result of the last update check in this session. Update checks are off by default. When enabled, one request goes to GitHub at start, when About opens, and on **Check now**. The checkbox itself sends no request. With checks off, all three paths send no request and **Check now** is disabled. Alidade does not download or install an update.
+Settings > **Show About** expands the About section; **Hide About** collapses it. About shows the app version and the time and result of the last update check in this session. Update checks are off by default. When enabled, one request goes to GitHub at start, when About opens, and on **Check now**. The checkbox itself sends no request. With checks off, all three paths send no request and **Check now** is disabled. Alidade does not download or install an update.
 
 The desktop window starts at 1280 x 800 and has a minimum size of 1008 x 640.
 
-Removing a target shows a toast for 10 seconds. **Undo** or **Ctrl+Z** restores the complete target at the same position, including any unfinished port text. A later removal replaces the earlier undo. After the toast expires, the removal cannot be undone.
+Removing a target shows a toast for 10 seconds. **Undo** or **Ctrl+Z** outside text inputs restores the complete target at the same position, including any unfinished port text. A later removal replaces the earlier undo. After the toast expires, the removal cannot be undone.
 
-**Help (F1)** is at the foot of every screen. The panel has searchable explanations of idle ping, ping under load, jitter, and shortcuts. **Ctrl+,** opens Settings. **Escape** closes Help and returns focus to the control that opened it. Tab can reach the Help opener; Enter or Space opens it. Tab stays in the help search while the panel is open. The panel and undo toast appear at once, with the same text when reduced motion is enabled.
+**Help (F1)** is at the foot of every screen. The panel has searchable explanations of idle ping, ping under load, jitter, and shortcuts. **Ctrl+,** opens Settings. **Escape** first clears a non-empty Help search. The next Escape closes Help and returns focus to the control that opened it. With Help closed, Escape dismisses the Undo toast without restoring the target. Tab can reach the Help opener; Enter or Space opens it. Tab stays in the help search while the panel is open. The panel and undo toast appear at once, with the same text when reduced motion is enabled.
 
 ## Licence
 

@@ -131,6 +131,9 @@ pub enum Message {
     TargetAdded,
     TargetRemoved(usize),
     UndoTargetRemoval,
+    EscapePressed,
+    UndoShortcutRequested,
+    UndoShortcutChecked(bool),
     UndoRemovalExpired(u64),
     TargetToggled(usize),
     /// One field of an existing target row, committed straight to
@@ -468,6 +471,11 @@ impl App {
             Message::SettingChanged(field) => self.apply_setting_change(field),
             Message::TargetAdded => self.add_target(),
             Message::TargetRemoved(index) => self.remove_target(index),
+            Message::UndoShortcutRequested => {
+                crate::screens::help::text_input_focused().map(Message::UndoShortcutChecked)
+            }
+            Message::UndoShortcutChecked(true) => Task::none(),
+            Message::UndoShortcutChecked(false) => self.update(Message::UndoTargetRemoval),
             Message::UndoTargetRemoval => {
                 if self.help_open {
                     Task::none()
@@ -522,6 +530,7 @@ impl App {
             }
             Message::HelpOpened(opener) => self.open_help(opener),
             Message::HelpClosed => self.close_help(),
+            Message::EscapePressed => self.escape(),
             Message::HelpSearchChanged(query) => {
                 self.help_query = query;
                 Task::none()
@@ -553,6 +562,18 @@ impl App {
         self.help_query.clear();
         self.help_open = true;
         iced::widget::operation::focus(crate::screens::help::search_id())
+    }
+
+    fn escape(&mut self) -> Task<Message> {
+        if !self.help_open {
+            self.removed_target = None;
+            return Task::none();
+        }
+        if !self.help_query.is_empty() {
+            self.help_query.clear();
+            return Task::none();
+        }
+        self.close_help()
     }
 
     fn close_help(&mut self) -> Task<Message> {
@@ -1490,7 +1511,7 @@ fn shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> O
     use iced::keyboard::{key::Named, Key, Modifiers};
     match (key, modifiers) {
         (Key::Named(Named::F1), mode) if mode.is_empty() => Some(Message::HelpRequested),
-        (Key::Named(Named::Escape), _) => Some(Message::HelpClosed),
+        (Key::Named(Named::Escape), _) => Some(Message::EscapePressed),
         (Key::Named(Named::Tab), mode) if mode.is_empty() || mode == Modifiers::SHIFT => {
             Some(Message::MoveFocus(mode.shift()))
         }
@@ -1498,7 +1519,7 @@ fn shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> O
             Some(Message::OpenSettings)
         }
         (Key::Character(key), mode) if mode == Modifiers::CTRL && key.eq_ignore_ascii_case("z") => {
-            Some(Message::UndoTargetRemoval)
+            Some(Message::UndoShortcutRequested)
         }
         _ => None,
     }

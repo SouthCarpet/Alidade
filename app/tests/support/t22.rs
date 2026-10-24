@@ -77,6 +77,6 @@ fn p2_ctrl_z_reaches_the_undo_action() {
     use iced::keyboard::{Key, Modifiers};
     assert!(matches!(
         shortcut(Key::Character("z".into()), Modifiers::CTRL),
-        Some(Message::UndoTargetRemoval)
+        Some(Message::UndoShortcutRequested)
     ));
 }

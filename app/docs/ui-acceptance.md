@@ -31,11 +31,12 @@ Settings holds the measurement interval, which metrics run, the targets table (g
 | Header | Alidade name and mark; Settings last; active tab uses a fill and square marker; a quick Light/Dark switch. |
 | Appearance | Light, Dark, System segments; same saved `theme` as the header switch; System follows the OS. |
 | About closed | Last section of Settings; opening it uses the shared consent gate. |
+| About labels | Show About when collapsed; Hide About when expanded. |
 | About, checks off | Version, explicit off message, consent checkbox, disabled Check now; no request from start, opening About, or Check now. |
 | About, checks on | At most one request in flight; result and UTC time of the last check in this session; failures are shown. |
-| Remove | Bottom-right Undo toast names the target for 10 seconds. Undo or Ctrl+Z restores its index, all fields, and raw port text. A stale timer cannot close a newer undo. |
+| Remove | Bottom-right Undo toast names the target for 10 seconds. Undo or Ctrl+Z outside text inputs restores its index, all fields, and raw port text. A stale timer cannot close a newer undo. |
 | Help | Footer Help or F1 opens a searchable panel with idle ping, ping under load, jitter, and shortcuts. No animation; same text with reduced motion. |
-| Keyboard | Ctrl+, opens Settings. Escape closes Help and returns focus to the previous control. Help has keyboard focus and opens with Enter or Space. Tab stays in help search; Settings and Undo shortcuts do not act through the panel. |
+| Keyboard | Ctrl+, opens Settings. Escape clears a non-empty Help search first, then closes Help and returns focus to the previous control. With Help closed, Escape dismisses Undo without restoring a target. Ctrl+Z in a focused text input does not restore a target. Help has keyboard focus and opens with Enter or Space. Tab stays in help search; Settings and Undo shortcuts do not act through the panel. |
 | Window | Default 1280 x 800, minimum 1008 x 640; the Settings body scrolls in its own gutter. |
 
 This run follows the controller's capture-only limit of 2026-10-24: no Computer Use or global pointer/key input. The existing startup flags capture the header at the top of Settings and Appearance with the closed About heading at the end (`--scroll settings-notifications`). Captures use light and dark themes at 1280 x 800 and 1008 x 640. Files are `A:/tmp/120-p2-maker/shots/header-{theme}-{size}.png` and `settings-tail-{theme}-{size}.png`, where theme is light/dark and size is default/min.
@@ -149,3 +150,5 @@ These Home captures use the seeded demo database, not that Task 2 round. Home sh
 3. The script waits a fixed 20 seconds, then takes one client-area capture. Polling `GetClientRect` right after launch often leaves the window at 0x0 for the rest of that process. The fixed wait avoids that stall.
 4. Settings Notifications shots add `--scroll settings-notifications` so the scrollable snaps to the end before capture.
 5. Home in this set is the empty state. Home reflects the last single test, not the seeded history table.
+
+Fix round 1 captures: `A:/tmp/120-p2-fix1/shots/settings-tail-{light,dark}-default.png`. Window capture uses the seeded demo, a fixed 20-second wait and PrintWindow of the launched app. Regression cases are in `app/tests/support/t23.rs`.

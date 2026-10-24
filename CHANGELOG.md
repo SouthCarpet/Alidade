@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Searchable Help on every screen and F1, with ping and jitter hints. Ctrl+, opens Settings. Escape closes Help and returns focus. Help and Undo show at once, including with reduced motion.
+- Searchable Help on every screen and F1, with ping and jitter hints. Ctrl+, opens Settings. Escape clears Help search before closing Help and returning focus. Help and Undo show at once, including with reduced motion.
 
 - A 10-second Undo toast for target removal, with Ctrl+Z support and full restoration of the target and its port input.
 
@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - About as the last Settings section: version, opt-in update checks at start, on opening About, and on Check now, with the last result and time for this session.
 
 ### Changed
+
+- Escape clears Help search before closing Help, or dismisses Undo when Help is closed. Ctrl+Z leaves target removal unchanged while a text input has focus.
+- About uses the actions Show About and Hide About.
 
 - Mark the active tab with a fill and a small square instead of an edge underline.
 

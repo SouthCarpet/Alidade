@@ -581,12 +581,16 @@ fn theme_row(palette: Palette, app: &App) -> Element<'_, Message> {
         .into()
 }
 
-fn about_section(palette: Palette, app: &App) -> Element<'_, Message> {
-    let label = if app.about_open {
-        "About (close)"
+pub(crate) fn about_label(open: bool) -> &'static str {
+    if open {
+        "Hide About"
     } else {
-        "About (open)"
-    };
+        "Show About"
+    }
+}
+
+fn about_section(palette: Palette, app: &App) -> Element<'_, Message> {
+    let label = about_label(app.about_open);
     let heading = button(text(label).size(TYPE.md).font(font_medium()))
         .style(palette.btn_ghost())
         .on_press(Message::AboutToggled);
