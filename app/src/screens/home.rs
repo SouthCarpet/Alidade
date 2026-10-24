@@ -14,7 +14,7 @@ use iced::{Border, Center, Color, Element, Fill, Length};
 
 use alidade_engine::{LoadWindow, PingStats, RoundResult, Throughput};
 
-use crate::state::{App, Message};
+use crate::state::{App, LatestRound, Message};
 use crate::theme::Palette;
 use crate::ui::{font_medium, font_numeric, font_regular};
 
@@ -31,29 +31,111 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
 
     sections.push(actions(palette, app));
 
+    if let Some(error) = &app.last_round_error {
+        sections.push(banner(
+            palette,
+            &format!("Stored round unavailable: {error}"),
+        ));
+    }
+
     match &app.last_round {
-        None => sections.push(empty_state(palette)),
-        Some(outcome) => {
-            if let Some(err) = &outcome.persist_error {
-                sections.push(banner(
-                    palette,
-                    &format!("round measured but could not be saved: {err}"),
-                ));
-            }
-            if outcome.result.capped {
-                sections.push(banner(
-                    palette,
-                    "capped: the daily data budget ended a throughput phase early",
-                ));
-            }
-            sections.push(tiles(palette, &outcome.result));
-        }
+        None if app.last_round_error.is_none() => sections.push(empty_state(palette)),
+        None => {}
+        Some(round) => sections.extend(round_sections(palette, round)),
     }
 
     container(column(sections).spacing(SPACE.s6).width(Fill))
         .width(Fill)
         .height(Fill)
         .into()
+}
+
+fn round_sections<'a>(palette: Palette, round: &LatestRound) -> Vec<Element<'a, Message>> {
+    let mut sections = Vec::new();
+    if let Some(error) = round.persist_error() {
+        sections.push(banner(
+            palette,
+            &format!("round measured but could not be saved: {error}"),
+        ));
+    }
+    if round.capped() {
+        sections.push(banner(
+            palette,
+            "capped: the daily data budget ended a throughput phase early",
+        ));
+    }
+    sections.push(match round {
+        LatestRound::Live(outcome) => tiles(palette, &outcome.result),
+        LatestRound::Stored(row) => stored_tiles(palette, row),
+    });
+    sections
+}
+
+fn stored_tiles<'a>(palette: Palette, stored: &alidade_store::RoundRow) -> Element<'a, Message> {
+    let [download, upload, idle, load, loss] = stored_values(stored);
+    row![
+        kpi_tile(palette, "Download", &download, "Mbit/s", None),
+        kpi_tile(palette, "Upload", &upload, "Mbit/s", None),
+        kpi_tile(palette, "Idle ping", &idle, "ms", None),
+        kpi_tile(palette, "Ping under load", &load, "ms", None),
+        kpi_tile(palette, "Loss", &loss, "%", None),
+    ]
+    .spacing(SPACE.s4)
+    .into()
+}
+
+fn stored_values(stored: &alidade_store::RoundRow) -> [TileValue; 5] {
+    let reason = stored.skipped_reason.as_deref();
+    let download = stored_speed(stored.down_bps, "download", reason);
+    let upload = stored_speed(stored.up_bps, "upload", reason);
+    let idle = match (
+        stored.ping_idle_ms,
+        stored.loss_idle_pct.or(stored.loss_pct),
+    ) {
+        (Some(avg), _) => TileValue::Value(format!("{avg:.1}")),
+        (None, Some(loss)) => TileValue::Missing(format!("no answer ({loss:.0}% loss)")),
+        (None, None) => TileValue::Missing(missing_reason(reason, "ping")),
+    };
+    let load = match super::ping_load_ms(stored) {
+        Some(avg) => TileValue::Value(format!("{avg:.1}")),
+        None => TileValue::Missing(stored_load_reason(stored)),
+    };
+    let loss = match stored.loss_idle_pct.or(stored.loss_pct) {
+        Some(loss) => TileValue::Value(format!("{loss:.2}")),
+        None => TileValue::Missing(missing_reason(reason, "ping")),
+    };
+    [download, upload, idle, load, loss]
+}
+
+fn stored_speed(value: Option<f64>, label: &str, reason: Option<&str>) -> TileValue {
+    match value {
+        Some(bps) => TileValue::Value(format!("{:.2}", bps / 1_000_000.0)),
+        None => TileValue::Missing(missing_reason(reason, label)),
+    }
+}
+
+fn stored_load_reason(stored: &alidade_store::RoundRow) -> String {
+    if let Some(loss) = stored.loss_down_pct.or(stored.loss_up_pct) {
+        return format!("no answer ({loss:.0}% loss)");
+    }
+    let window = stored
+        .load_down_ms
+        .map(|ms| (ms, stored.ping_down_samples))
+        .or_else(|| stored.load_up_ms.map(|ms| (ms, stored.ping_up_samples)));
+    if let Some((ms, samples)) = window {
+        let samples = samples.map_or_else(
+            || "sample count not stored".into(),
+            |count| format!("{count} sample(s)"),
+        );
+        return format!(
+            "not enough load to measure ({samples} in {:.1}s of load)",
+            ms / 1000.0
+        );
+    }
+    if stored.down_bps.or(stored.up_bps).is_some() {
+        return "load details not stored for this round".into();
+    }
+    "no throughput phase ran this round".into()
 }
 
 // ---------------------------------------------------------------------

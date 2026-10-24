@@ -6,7 +6,23 @@ This note records what the desktop screens do, the captured shots, the Kaliber v
 
 ### Home
 
-Home is the starting screen. It shows the current status, five KPI tiles (download, upload, idle ping, ping under load, loss), and the buttons **Run single test** and **Start continuous**. With no last single test, it shows an empty-state card.
+Home is the starting screen. It shows the current status, five KPI tiles (download, upload, idle ping, ping under load, loss), and the buttons **Run single test** and **Start continuous**. At start it loads the latest stored round, even if it is older than the chart window. An empty store shows the empty state. A read failure shows its reason instead of claiming there are no rounds.
+
+### Boot history (plan 120 p3)
+
+The boot query reads the selected database from the Unix epoch to the current time, then takes the last row in timestamp and id order. This uses the existing store API and reads all matching rows. Stored rows are kept as stored rows; missing live-only details are never reconstructed. A live result replaces the stored result, including when saving that live result fails.
+
+Additive surface inventory:
+
+- `LatestRound::Live` holds the live outcome and its save error.
+- `LatestRound::Stored` holds the exact stored row.
+- `LatestRound::started_at()` gives the timestamp of either source.
+- `LatestRound::capped()` gives the recorded budget-cap state within the app.
+- `LatestRound::persist_error()` gives a live save error within the app.
+- `App::last_round` now holds either source in the same Home state.
+- `App::last_round_error` holds a boot read error, separate from chart errors.
+- Boot rule: read beyond the chart window, order by timestamp then id, and keep an empty store empty.
+- Home read-error strings: `Stored round unavailable: <reason>`; saved measurement values remain distinct from missing values.
 
 ### Continuous
 
@@ -128,7 +144,7 @@ One GUI single test against `speed.cloudflare.com` on **2026-08-20**. The round 
 
 The CLI export of the same row is `2026-08-20T21:22:02Z,full,195.94,14.98,22.25,21.3,22.090909...,5,0,false,,10001.2773,10636.7028`. `ping_down_ms` 21.3 and `ping_up_ms` about 22.09 average to 21.7 ms on the tile.
 
-These Home captures use the seeded demo database, not that Task 2 round. Home shows the last single test. The demo store has history rounds but no last single test, so Home is empty in these shots.
+These historical Home captures use the seeded demo database, not that Task 2 round. At the time of those captures, Home only showed a live result and was empty after a restart. Plan 120 p3 now loads the latest stored round at start.
 
 ## Not covered yet
 
@@ -149,6 +165,6 @@ These Home captures use the seeded demo database, not that Task 2 round. Home sh
 2. `app/scripts/shoot.ps1` builds the app, seeds that database, then launches `alidade-app` with `--screen`, `--theme`, `--window 1280x800`, `--db`, and `--settings`.
 3. The script waits a fixed 20 seconds, then takes one client-area capture. Polling `GetClientRect` right after launch often leaves the window at 0x0 for the rest of that process. The fixed wait avoids that stall.
 4. Settings Notifications shots add `--scroll settings-notifications` so the scrollable snaps to the end before capture.
-5. Home in this set is the empty state. Home reflects the last single test, not the seeded history table.
+5. Home in this historical set is empty because the earlier app only showed a live result. Current Home loads the latest seeded round at start.
 
 Fix round 1 captures: `A:/tmp/120-p2-fix1/shots/settings-tail-{light,dark}-default.png`. Window capture uses the seeded demo, a fixed 20-second wait and PrintWindow of the launched app. Regression cases are in `app/tests/support/t23.rs`.

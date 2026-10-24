@@ -6,7 +6,7 @@ Alidade measures a fixed internet link over time and keeps the record. Each full
 
 ## Features
 
-- Home runs a single test.
+- Home loads the latest stored round at start and runs a single test. An empty store shows the empty state; a read failure shows its reason.
 - Continuous shows a chart and a table of rounds.
 - Ping monitor shows target sparklines.
 - History exports CSV and copies diagnostics.
@@ -37,6 +37,8 @@ See [INSTALL.md](INSTALL.md), [CHANGELOG.md](CHANGELOG.md), and [KNOWN_ISSUES.md
 The desktop app uses vendored Kaliber design tokens 0.10.0, with light and dark palettes. Raised panes use a tone step and a 1 px hairline. Text uses Fira Sans; metric numbers and chart labels use Fira Sans Tabular, with equal-width figures and a plain zero.
 
 ## Desktop controls
+
+Home reads stored history from the database selected by `--db`, or the normal app database. It keeps stored rows separate from live results, so it does not invent sample counts or durations that were not saved. The existing store query reads rounds from the Unix epoch to the current time before selecting the newest. This also loads a last round older than the chart window.
 
 The header shows the Alidade mark and name. Settings is the last tab. The header theme switch chooses Light or Dark from the theme in use. Settings > Appearance has Light, Dark, and System segments. System is the default and follows Windows. Both controls save the same `theme` preference in `ui-settings.toml`, beside `settings.toml`.
 

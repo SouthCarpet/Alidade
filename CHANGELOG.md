@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Load the latest stored round on Home at start, including rounds older than the chart window. Show a store read failure with its reason.
+
 - Searchable Help on every screen and F1, with ping and jitter hints. Ctrl+, opens Settings. Escape clears Help search before closing Help and returning focus. Help and Undo show at once, including with reduced motion.
 
 - A 10-second Undo toast for target removal, with Ctrl+Z support and full restoration of the target and its port input.

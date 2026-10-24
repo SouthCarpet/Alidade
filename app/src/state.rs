@@ -69,6 +69,37 @@ pub struct RoundOutcome {
     pub persist_error: Option<String>,
 }
 
+/// Stored rows stay distinct from live results because the store does not
+/// retain every sample count and duration from a live round.
+#[derive(Debug, Clone)]
+pub enum LatestRound {
+    Live(Box<RoundOutcome>),
+    Stored(Box<RoundRow>),
+}
+
+impl LatestRound {
+    pub fn started_at(&self) -> SystemTime {
+        match self {
+            Self::Live(outcome) => outcome.result.started_at,
+            Self::Stored(row) => row.started_at,
+        }
+    }
+
+    pub(crate) fn capped(&self) -> bool {
+        match self {
+            Self::Live(outcome) => outcome.result.capped,
+            Self::Stored(row) => row.capped,
+        }
+    }
+
+    pub(crate) fn persist_error(&self) -> Option<&str> {
+        match self {
+            Self::Live(outcome) => outcome.persist_error.as_deref(),
+            Self::Stored(_) => None,
+        }
+    }
+}
+
 /// One enabled ping-monitor target, with the samples taken this session.
 #[derive(Debug, Clone)]
 pub struct TargetLive {
@@ -188,7 +219,8 @@ pub struct App {
     /// back to in memory are what is actually on disk).
     pub settings_error: Option<String>,
     pub round_running: bool,
-    pub last_round: Option<RoundOutcome>,
+    pub last_round: Option<LatestRound>,
+    pub last_round_error: Option<String>,
     pub scheduler: Scheduler,
     pub continuous_running: bool,
     pub continuous_paused: bool,
@@ -309,13 +341,19 @@ impl App {
             .or_else(|| tray_error.map(|message| Toast { ok: false, message }));
         // `--screen` (B1) picks the initial tab; unset falls back to Home.
         let screen = flags.screen.unwrap_or_default();
+        let (last_round, last_round_error) =
+            match load_latest_round(&flags.db.unwrap_or_else(default_db_path)) {
+                Ok(round) => (round, None),
+                Err(error) => (None, Some(error)),
+            };
         let mut app = App {
             screen,
             settings,
             settings_path,
             settings_error,
             round_running: false,
-            last_round: None,
+            last_round,
+            last_round_error,
             scheduler,
             continuous_running: false,
             continuous_paused: false,
@@ -728,7 +766,8 @@ impl App {
             .saturating_add(outcome.result.up_load.map_or(0, |window| window.bytes));
         self.scheduler.record_bytes(SystemTime::now(), bytes);
         self.notify_thresholds(&outcome.result);
-        self.last_round = Some(outcome);
+        self.last_round = Some(LatestRound::Live(Box::new(outcome)));
+        self.last_round_error = None;
         load_chart_task()
     }
 
@@ -1465,6 +1504,20 @@ fn open_store() -> Result<alidade_store::Store, String> {
     alidade_store::Store::open(&path).map_err(|err| err.to_string())
 }
 
+fn load_latest_round(path: &std::path::Path) -> Result<Option<LatestRound>, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+    }
+    let store = alidade_store::Store::open(path).map_err(|error| error.to_string())?;
+    // The existing store API returns oldest first, with id as the tie breaker.
+    // Read beyond the chart window so an old last round still appears at boot.
+    let mut rows = store
+        .rounds_between(SystemTime::UNIX_EPOCH, SystemTime::now())
+        .map_err(|error| error.to_string())?;
+    Ok(rows.pop().map(|row| LatestRound::Stored(Box::new(row))))
+}
+
 /// Same location the CLI writes to (`cli/src/main.rs::default_db_path`):
 /// `%LOCALAPPDATA%\Alidade\alidade.db`, so a round the app measures shows up
 /// in `alidade export` and vice versa. Not exported by `alidade-store` (the
@@ -1544,6 +1597,7 @@ mod tests {
             settings_error: None,
             round_running: false,
             last_round: None,
+            last_round_error: None,
             scheduler,
             continuous_running: false,
             continuous_paused: false,
