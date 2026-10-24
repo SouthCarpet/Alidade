@@ -86,11 +86,36 @@ impl App {
             .height(Fill)
             .padding(SPACE.s6);
 
-        container(body)
+        let body: Element<'_, Message> = container(body)
             .width(Fill)
             .height(Fill)
             .style(move |_| iced::widget::container::Style::default().background(palette.bg()))
-            .into()
+            .into();
+        let mut layers = vec![body];
+        if let Some(removed) = &self.removed_target {
+            let toast = palette.well_frame(
+                row![
+                    text(format!("Removed {}", removed.target.name))
+                        .size(TYPE.sm)
+                        .color(palette.text())
+                        .width(Fill),
+                    button(text("Undo (Ctrl+Z)").size(TYPE.sm).font(font_medium()))
+                        .padding([SPACE.s2, SPACE.s3])
+                        .style(palette.btn_secondary())
+                        .on_press(Message::UndoTargetRemoval)
+                ]
+                .spacing(SPACE.s3)
+                .align_y(Center),
+            );
+            layers.push(
+                container(container(toast).max_width(600.0))
+                    .padding(SPACE.s4)
+                    .align_right(Fill)
+                    .align_bottom(Fill)
+                    .into(),
+            );
+        }
+        iced::widget::stack(layers).into()
     }
 }
 

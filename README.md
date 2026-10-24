@@ -44,6 +44,8 @@ Settings > About shows the app version and the time and result of the last updat
 
 The desktop window starts at 1280 × 800 and has a minimum size of 1008 × 640.
 
+Removing a target shows a toast for 10 seconds. **Undo** or **Ctrl+Z** restores the complete target at the same position, including any unfinished port text. A later removal replaces the earlier undo. After the toast expires, the removal cannot be undone.
+
 ## Licence
 
 Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

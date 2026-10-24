@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- A 10-second Undo toast for target removal, with Ctrl+Z support and full restoration of the target and its port input.
+
 - Header with the Alidade mark and name, a theme quick switch, and a Light/Dark/System segmented control in Settings.
 - About as the last Settings section: version, opt-in update checks at start, on opening About, and on Check now, with the last result and time for this session.
 

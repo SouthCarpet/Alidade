@@ -85,6 +85,14 @@ pub struct Toast {
     pub message: String,
 }
 
+/// A reversible removal keeps the original row and unparsed port input together.
+#[derive(Debug, Clone)]
+pub struct RemovedTarget {
+    pub index: usize,
+    pub target: TargetSpec,
+    pub port_text: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     ScreenSelected(Screen),
@@ -122,6 +130,8 @@ pub enum Message {
     SettingChanged(SettingField),
     TargetAdded,
     TargetRemoved(usize),
+    UndoTargetRemoval,
+    UndoRemovalExpired(u64),
     TargetToggled(usize),
     /// One field of an existing target row, committed straight to
     /// `Settings::targets[index]`.
@@ -186,6 +196,8 @@ pub struct App {
     clock_armed: bool,
     pub ping_targets: Vec<TargetLive>,
     pub toast: Option<Toast>,
+    pub removed_target: Option<RemovedTarget>,
+    removal_generation: u64,
     pub load_error: Option<String>,
     /// UI-only preferences (theme, autostart, notification thresholds) —
     /// not part of `engine::Settings`, see `screens::settings`'s module doc.
@@ -308,6 +320,8 @@ impl App {
             clock_armed: false,
             ping_targets,
             toast,
+            removed_target: None,
+            removal_generation: 0,
             load_error: None,
             ui_settings,
             interval_text,
@@ -372,6 +386,12 @@ impl App {
         Subscription::batch([
             window::close_requests().map(Message::WindowCloseRequested),
             iced::system::theme_changes().map(Message::SystemThemeChanged),
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key, modifiers, ..
+                }) => shortcut(key, modifiers),
+                _ => None,
+            }),
         ])
     }
 
@@ -444,6 +464,13 @@ impl App {
             Message::SettingChanged(field) => self.apply_setting_change(field),
             Message::TargetAdded => self.add_target(),
             Message::TargetRemoved(index) => self.remove_target(index),
+            Message::UndoTargetRemoval => self.undo_target_removal(),
+            Message::UndoRemovalExpired(generation) => {
+                if generation == self.removal_generation {
+                    self.removed_target = None;
+                }
+                Task::none()
+            }
             Message::TargetToggled(index) => self.toggle_target(index),
             Message::TargetFieldChanged(index, field) => self.edit_target(index, field),
             Message::NewTargetFieldChanged(field) => {
@@ -941,10 +968,36 @@ impl App {
         if index >= self.settings.targets.len() {
             return Task::none();
         }
-        self.settings.targets.remove(index);
-        if index < self.target_port_text.len() {
-            self.target_port_text.remove(index);
-        }
+        let target = self.settings.targets.remove(index);
+        let port_text = if index < self.target_port_text.len() {
+            self.target_port_text.remove(index)
+        } else {
+            port_text_for(&target)
+        };
+        self.removed_target = Some(RemovedTarget {
+            index,
+            target,
+            port_text,
+        });
+        self.removal_generation = self.removal_generation.wrapping_add(1);
+        let generation = self.removal_generation;
+        let expiry = Task::perform(
+            async move {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                generation
+            },
+            Message::UndoRemovalExpired,
+        );
+        Task::batch([self.commit_settings(), expiry])
+    }
+
+    fn undo_target_removal(&mut self) -> Task<Message> {
+        let Some(removed) = self.removed_target.take() else {
+            return Task::none();
+        };
+        let index = removed.index.min(self.settings.targets.len());
+        self.settings.targets.insert(index, removed.target);
+        self.target_port_text.insert(index, removed.port_text);
         self.commit_settings()
     }
 
@@ -1407,6 +1460,8 @@ mod tests {
             clock_armed: false,
             ping_targets: Vec::new(),
             toast: None,
+            removed_target: None,
+            removal_generation: 0,
             load_error: None,
             ui_settings: UiSettings::default(),
             interval_text: "60".to_string(),
@@ -1680,4 +1735,15 @@ mod tests {
         );
     }
     include!("../tests/support/t21.rs");
+    include!("../tests/support/t22.rs");
+}
+
+fn shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Message> {
+    if modifiers == iced::keyboard::Modifiers::CTRL
+        && key == iced::keyboard::Key::Character("z".into())
+    {
+        Some(Message::UndoTargetRemoval)
+    } else {
+        None
+    }
 }
