@@ -67,6 +67,15 @@ pub fn series_specs(palette: Palette) -> [SeriesSpec; 6] {
     })
 }
 
+/// The labelled samples consumed by a panel's key renderer.
+pub fn key_entries(palette: Palette, panel: usize) -> Vec<(&'static str, Stroke<'static>)> {
+    series_specs(palette)
+        .into_iter()
+        .filter(|series| series.panel == panel)
+        .map(|series| (series.label, series.stroke))
+        .collect()
+}
+
 /// The time-range chips used by the Continuous screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TimeRange {
@@ -377,8 +386,6 @@ impl LineChart {
             ["Throughput (Mbit/s)", "Latency (ms)", "Loss (%)"][panel],
             self.palette.muted(),
         );
-        let mut key_x = plot.x;
-        let mut key_y = plot.y + plot.height + SPACE.s4;
         for series in series_specs(self.palette)
             .into_iter()
             .filter(|s| s.panel == panel)
@@ -391,8 +398,12 @@ impl LineChart {
                 series.metric,
                 series.stroke,
             );
+        }
+        let mut key_x = plot.x;
+        let mut key_y = plot.y + plot.height + SPACE.s4;
+        for (label, stroke) in key_entries(self.palette, panel) {
             let entry_width =
-                SPACE.s6 * 2.0 + SPACE.s1 + series.label.len() as f32 * TYPE.xs * LABEL_EM_PER_CHAR;
+                SPACE.s6 * 2.0 + SPACE.s1 + label.len() as f32 * TYPE.xs * LABEL_EM_PER_CHAR;
             if key_x > plot.x && key_x + entry_width > plot.x + plot.width {
                 key_x = plot.x;
                 key_y += SPACE.s4 + SPACE.s1;
@@ -402,11 +413,11 @@ impl LineChart {
                     CanvasPoint::new(key_x, key_y),
                     CanvasPoint::new(key_x + SPACE.s6 * 2.0, key_y),
                 ),
-                series.stroke,
+                stroke,
             );
             draw_text(
                 frame,
-                series.label,
+                label,
                 CanvasPoint::new(key_x + SPACE.s6 * 2.0 + SPACE.s1, key_y),
                 self.palette.muted(),
                 TYPE.xs,

@@ -40,11 +40,16 @@ Additive surface inventory:
 
 - `chart::SeriesSpec` holds a series label, panel, stroke and metric accessor.
 - `chart::series_specs()` supplies the exact same stroke to the plot and its key sample.
+- `chart::key_entries(palette, panel)` supplies the labels and sample strokes consumed by each panel's key renderer.
 - Chart key labels: Download, Upload, Idle, Load, Jitter, Packet loss.
 - `screens::RoundColumn` defines the seven shared table columns; `alignment()` gives the alignment used by headers and values, and the private `label()` gives header text.
 - `screens::drawing::Scale::end_label()` formats ms with one decimal and Mbit/s with two decimals.
+- `screens::round_cell()` builds the text widget for headers and values from `RoundColumn`; tests lay out those widgets with the headless text renderer and inspect paragraph alignment.
+- `screens::drawing::scale_texts()` supplies the canvas text draw list, including the formatted scale end and the missing-values reason.
 - Key layout rule: wrap entries within each plot and reserve two rows within the existing canvas height.
 - Regression evidence: `A:/tmp/120-p3-fix1/red.log`, `green.log`; captures in `A:/tmp/120-p3-fix1/after/`.
+- Fix round 2 tests inspect panel key entries, built header/value cells and canvas text. Mutation logs, gate logs and unchanged-layout captures are in `A:/tmp/120-p3-fix2/`.
+- The two fix round 2 light captures match every app pixel from fix round 1. Full-window equality is limited by native Windows title-bar differences in rows 0–30; capture used PrintWindow and a fixed 30-second wait.
 
 ### History
 

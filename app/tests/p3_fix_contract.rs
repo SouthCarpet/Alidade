@@ -1,26 +1,39 @@
-use alidade_app::chart::series_specs;
-use alidade_app::screens::drawing::Scale;
-use alidade_app::screens::RoundColumn;
+use alidade_app::chart::key_entries;
+use alidade_app::screens::drawing::{scale_texts, Scale};
 use alidade_app::theme::Palette;
-use iced::alignment::Horizontal;
 
 #[test]
 fn continuous_keys_cover_every_series_with_its_exact_stroke() {
-    let specs = series_specs(Palette::light());
+    // R2-F1/M1: each panel's rendered key keeps the six specified labels and strokes.
+    let palette = Palette::light();
+    let keys = [
+        key_entries(palette, 0),
+        key_entries(palette, 1),
+        key_entries(palette, 2),
+    ];
     assert_eq!(
-        specs.map(|s| (s.panel, s.label)),
+        keys.each_ref()
+            .map(|entries| entries.iter().map(|(label, _)| *label).collect::<Vec<_>>()),
         [
-            (0, "Download"),
-            (0, "Upload"),
-            (1, "Idle"),
-            (1, "Load"),
-            (1, "Jitter"),
-            (2, "Packet loss"),
+            vec!["Download", "Upload"],
+            vec!["Idle", "Load", "Jitter"],
+            vec!["Packet loss"]
         ]
     );
-    assert_eq!(specs.map(|s| s.stroke.width), [2.0; 6]);
+    let strokes: Vec<_> = keys
+        .into_iter()
+        .flatten()
+        .map(|(_, stroke)| stroke)
+        .collect();
     assert_eq!(
-        specs.map(|s| s.stroke.line_dash.segments),
+        strokes.iter().map(|s| s.width).collect::<Vec<_>>(),
+        [2.0; 6]
+    );
+    assert_eq!(
+        strokes
+            .iter()
+            .map(|s| s.line_dash.segments)
+            .collect::<Vec<_>>(),
         [
             &[][..],
             &[8.0, 5.0],
@@ -31,7 +44,7 @@ fn continuous_keys_cover_every_series_with_its_exact_stroke() {
         ]
     );
     assert_eq!(
-        specs.map(|s| s.stroke.style),
+        strokes.iter().map(|s| s.style).collect::<Vec<_>>(),
         Palette::light()
             .theme
             .chart
@@ -40,37 +53,34 @@ fn continuous_keys_cover_every_series_with_its_exact_stroke() {
 }
 
 #[test]
-fn rounds_numeric_columns_align_headers_and_values_right() {
-    assert_eq!(
-        [
-            RoundColumn::Down.alignment(),
-            RoundColumn::Up.alignment(),
-            RoundColumn::PingIdle.alignment(),
-            RoundColumn::PingLoad.alignment(),
-            RoundColumn::Jitter.alignment(),
-            RoundColumn::Loss.alignment(),
-        ],
-        [Horizontal::Right; 6]
-    );
-    assert_eq!(RoundColumn::Time.alignment(), Horizontal::Left);
-}
-
-#[test]
 fn latency_scale_end_matches_summary_precision() {
+    // R2-F1/M3: the canvas text for 42.8858 ms rounds to 42.9 ms, like the summary.
     assert_eq!(
-        Scale {
-            unit: "ms",
-            values: [Some(13.7), Some(42.8858)]
-        }
-        .end_label(),
+        scale_texts(
+            &Scale {
+                unit: "ms",
+                values: [Some(13.7), Some(42.8858)]
+            },
+            0.0,
+            400.0,
+            ["Idle ping", "Under load"],
+            Palette::light()
+        )[4]
+        .content,
         "42.9 ms"
     );
     assert_eq!(
-        Scale {
-            unit: "Mbit/s",
-            values: [Some(94.03164), Some(27.89626)]
-        }
-        .end_label(),
+        scale_texts(
+            &Scale {
+                unit: "Mbit/s",
+                values: [Some(94.03164), Some(27.89626)]
+            },
+            0.0,
+            400.0,
+            ["Download", "Upload"],
+            Palette::light()
+        )[4]
+        .content,
         "94.03 Mbit/s"
     );
 }

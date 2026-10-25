@@ -221,58 +221,18 @@ impl DiagramCanvas {
     ) {
         let start = x + SPACE.s6 * 4.0;
         let end = x + width - SPACE.s2;
-        let title = if scale.unit == "ms" {
-            "Latency"
-        } else {
-            "Throughput"
-        };
-        canvas_text(
-            frame,
-            format!("{title} ({})", scale.unit),
-            Point::new(x, SPACE.s2),
-            self.palette.text(),
-            false,
-        );
-        for (index, label) in labels.into_iter().enumerate() {
-            canvas_text(
-                frame,
-                label,
-                Point::new(x, SPACE.s8 + index as f32 * SPACE.s6),
-                self.palette.muted(),
-                false,
+        for label in scale_texts(scale, x, width, labels, self.palette) {
+            frame.fill_text(label);
+        }
+        if scale.values.iter().any(Option::is_some) {
+            let y = SPACE.s6 * 3.0;
+            frame.stroke(
+                &canvas::Path::line(Point::new(start, y), Point::new(end, y)),
+                canvas::Stroke::default()
+                    .with_width(1.0)
+                    .with_color(self.palette.border()),
             );
         }
-        let y = SPACE.s6 * 3.0;
-        if scale.values.iter().all(Option::is_none) {
-            canvas_text(
-                frame,
-                "No values in this round",
-                Point::new(start, y + SPACE.s3),
-                self.palette.muted(),
-                false,
-            );
-            return;
-        }
-        frame.stroke(
-            &canvas::Path::line(Point::new(start, y), Point::new(end, y)),
-            canvas::Stroke::default()
-                .with_width(1.0)
-                .with_color(self.palette.border()),
-        );
-        canvas_text(
-            frame,
-            "0",
-            Point::new(start, y + SPACE.s3),
-            self.palette.muted(),
-            false,
-        );
-        canvas_text(
-            frame,
-            scale.end_label(),
-            Point::new(end, y + SPACE.s3),
-            self.palette.muted(),
-            true,
-        );
     }
 
     fn mark(&self, frame: &mut canvas::Frame, primitive: Primitive, width: f32) {
@@ -305,14 +265,67 @@ impl DiagramCanvas {
     }
 }
 
+/// Text draw list shared with the canvas, including the formatted scale end.
+pub fn scale_texts(
+    scale: &Scale,
+    x: f32,
+    width: f32,
+    labels: [&str; 2],
+    palette: Palette,
+) -> Vec<canvas::Text> {
+    let title = if scale.unit == "ms" {
+        "Latency"
+    } else {
+        "Throughput"
+    };
+    let mut texts = vec![canvas_text(
+        format!("{title} ({})", scale.unit),
+        Point::new(x, SPACE.s2),
+        palette.text(),
+        false,
+    )];
+    for (index, label) in labels.into_iter().enumerate() {
+        texts.push(canvas_text(
+            label,
+            Point::new(x, SPACE.s8 + index as f32 * SPACE.s6),
+            palette.muted(),
+            false,
+        ));
+    }
+    let start = x + SPACE.s6 * 4.0;
+    let end = x + width - SPACE.s2;
+    let y = SPACE.s6 * 3.0 + SPACE.s3;
+    if scale.values.iter().all(Option::is_none) {
+        texts.push(canvas_text(
+            "No values in this round",
+            Point::new(start, y),
+            palette.muted(),
+            false,
+        ));
+    } else {
+        texts.push(canvas_text(
+            "0",
+            Point::new(start, y),
+            palette.muted(),
+            false,
+        ));
+        texts.push(canvas_text(
+            scale.end_label(),
+            Point::new(end, y),
+            palette.muted(),
+            true,
+        ));
+    }
+    texts
+}
+
 fn canvas_text(
-    frame: &mut canvas::Frame,
     content: impl Into<String>,
     position: Point,
     color: Color,
     right: bool,
-) {
-    frame.fill_text(canvas::Text {
+) -> canvas::Text {
+    canvas::Text {
         content: content.into(),
         position,
         color,
@@ -326,5 +339,5 @@ fn canvas_text(
         .into(),
         align_y: alignment::Vertical::Center,
         ..canvas::Text::default()
-    });
+    }
 }

@@ -235,39 +235,122 @@ impl RoundColumn {
     }
 }
 
-fn header_cell<'a>(palette: Palette, column: RoundColumn, portion: u16) -> Element<'a, Message> {
-    text(column.label())
-        .size(TYPE.xs)
-        .font(font_medium())
-        .color(palette.muted())
+fn round_cell(
+    palette: Palette,
+    column: RoundColumn,
+    portion: u16,
+    value: Option<String>,
+) -> iced::widget::Text<'static> {
+    let header = value.is_none();
+    text(value.unwrap_or_else(|| column.label().into()))
         .align_x(column.alignment())
         .width(Length::FillPortion(portion))
-        .into()
+        .size(if header { TYPE.xs } else { TYPE.sm })
+        .font(if header {
+            font_medium()
+        } else if matches!(column, RoundColumn::Time) {
+            font_regular()
+        } else {
+            font_numeric()
+        })
+        .color(if header {
+            palette.muted()
+        } else {
+            palette.text()
+        })
 }
 
-fn time_cell<'a>(palette: Palette, value: String, portion: u16) -> Element<'a, Message> {
-    text(value)
-        .size(TYPE.sm)
-        .font(font_regular())
-        .align_x(RoundColumn::Time.alignment())
-        .color(palette.text())
-        .width(Length::FillPortion(portion))
-        .into()
+fn header_cell(palette: Palette, column: RoundColumn, portion: u16) -> iced::widget::Text<'static> {
+    round_cell(palette, column, portion, None)
 }
 
-fn numeric_cell<'a>(
+fn time_cell(palette: Palette, value: String, portion: u16) -> iced::widget::Text<'static> {
+    round_cell(palette, RoundColumn::Time, portion, Some(value))
+}
+
+fn numeric_cell(
     palette: Palette,
     value: String,
     portion: u16,
     column: RoundColumn,
-) -> Element<'a, Message> {
-    text(value)
-        .size(TYPE.sm)
-        .font(font_numeric())
-        .color(palette.text())
-        .align_x(column.alignment())
-        .width(Length::FillPortion(portion))
-        .into()
+) -> iced::widget::Text<'static> {
+    round_cell(palette, column, portion, Some(value))
+}
+
+#[cfg(test)]
+mod round_cell_tests {
+    use super::*;
+    use iced::advanced::{
+        layout, renderer::Headless, text::Renderer as TextRenderer, widget::Tree,
+    };
+    use iced::alignment::Horizontal;
+
+    fn built_alignment(
+        cell: iced::widget::Text<'static>,
+        renderer: &iced::Renderer,
+    ) -> iced::advanced::text::Alignment {
+        let mut element: Element<'static, Message> = cell.into();
+        let mut tree = Tree::new(element.as_widget());
+        element.as_widget_mut().layout(
+            &mut tree,
+            renderer,
+            &layout::Limits::new(iced::Size::ZERO, iced::Size::new(200.0, 40.0)),
+        );
+        tree.state
+            .downcast_ref::<iced::widget::text::State<<iced::Renderer as TextRenderer>::Paragraph>>(
+            )
+            .align_x()
+    }
+
+    #[tokio::test]
+    async fn rounds_numeric_columns_align_headers_and_values_right() {
+        // R2-F1: every numeric header and value must build a right-aligned paragraph.
+        let renderer =
+            iced::Renderer::new(iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"))
+                .await
+                .expect("headless text renderer");
+        for column in [
+            RoundColumn::Down,
+            RoundColumn::Up,
+            RoundColumn::PingIdle,
+            RoundColumn::PingLoad,
+            RoundColumn::Jitter,
+            RoundColumn::Loss,
+        ] {
+            let header = header_cell(Palette::light(), column, 2);
+            let value = numeric_cell(Palette::light(), "42.9".into(), 2, column);
+            assert_eq!(
+                built_alignment(header, &renderer),
+                Horizontal::Right.into(),
+                "numeric header"
+            );
+            assert_eq!(
+                built_alignment(value, &renderer),
+                Horizontal::Right.into(),
+                "numeric value"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn time_header_and_value_keep_left_alignment() {
+        // The p3 table contract keeps Time headers and timestamp values left-aligned.
+        let renderer =
+            iced::Renderer::new(iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"))
+                .await
+                .expect("headless text renderer");
+        assert_eq!(
+            built_alignment(
+                header_cell(Palette::light(), RoundColumn::Time, 3),
+                &renderer
+            ),
+            Horizontal::Left.into()
+        );
+        assert_eq!(
+            built_alignment(time_cell(Palette::light(), "12:34:56".into(), 3), &renderer),
+            Horizontal::Left.into()
+        );
+    }
 }
 
 fn table_header(palette: Palette) -> Element<'static, Message> {
