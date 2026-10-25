@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "alidade-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alidade-engine",
  "alidade-store",
@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "alidade-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alidade-engine",
  "alidade-store",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "alidade-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "alidade-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alidade-engine",
  "chrono",
