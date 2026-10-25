@@ -39,6 +39,17 @@ Version 1.1**. The full licence text ships beside the fonts as
 `app/vendor/fonts/OFL.txt`, as the OFL requires. Inter is redistributed
 unmodified; it is not a Reserved Font Name usage.
 
+`app/vendor/assets/fonts/fira-sans/` carries **Fira Sans** and the renamed
+**Fira Sans Tabular** family (Regular, Medium, SemiBold and Bold). Both use
+the SIL Open Font License, Version 1.1. The copyright notices and full licence
+ship in `app/vendor/assets/fonts/fira-sans/OFL.txt`. The Tabular copy maps
+digits to equal-width glyphs and keeps a plain zero.
+
+`app/vendor/fonts/` also retains Atkinson Hyperlegible Next, with its copyright
+notices and SIL Open Font License in `OFL-AtkinsonHyperlegibleNext.txt`.
+Inter and Atkinson remain vendored to match the source mapping; the app loads
+only the eight Fira Sans files.
+
 ## Vendored design tokens
 
 `app/vendor/crates/design-tokens/` is a copy of an internal crate that turns the

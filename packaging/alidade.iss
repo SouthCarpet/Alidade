@@ -1,6 +1,6 @@
 ﻿; Alidade Windows installer (Inno Setup 6).
 ; Build with packaging\build-installer.ps1, or manually:
-;   iscc /DAppVersion=0.1.0 packaging\alidade.iss
+;   iscc /DAppVersion=0.2.0 packaging\alidade.iss
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"

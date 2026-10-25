@@ -30,3 +30,6 @@ open = "5"
 [target.'cfg(windows)'.dependencies]
 tray-icon = "0.23"    # tray icon + Show/Run/Pause/Quit menu
 notify-rust = "4"     # Windows toast for threshold breaches
+
+[dev-dependencies]
+tempfile = "3.23.0"

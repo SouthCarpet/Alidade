@@ -76,48 +76,28 @@ pub fn parse<I: Iterator<Item = String>>(args: I) -> StartupFlags {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--minimized" => flags.minimized = true,
-            "--screen" => {
-                if let Some(value) = iter.next() {
-                    if let Some(screen) = parse_screen(&value) {
-                        flags.screen = Some(screen);
-                    }
-                }
-            }
-            "--theme" => {
-                if let Some(value) = iter.next() {
-                    if let Some(theme) = parse_theme(&value) {
-                        flags.theme = Some(theme);
-                    }
-                }
-            }
-            "--window" => {
-                if let Some(value) = iter.next() {
-                    if let Some(window) = parse_window(&value) {
-                        flags.window = window;
-                    }
-                }
-            }
-            "--db" => {
-                if let Some(value) = iter.next() {
-                    flags.db = Some(PathBuf::from(value));
-                }
-            }
-            "--settings" => {
-                if let Some(value) = iter.next() {
-                    flags.settings = Some(PathBuf::from(value));
-                }
-            }
-            "--scroll" => {
-                if let Some(value) = iter.next() {
-                    if let Some(target) = parse_scroll(&value) {
-                        flags.scroll = Some(target);
-                    }
-                }
+            "--screen" | "--theme" | "--window" | "--db" | "--settings" | "--scroll" => {
+                apply_valued(&mut flags, &arg, iter.next());
             }
             _ => {}
         }
     }
     flags
+}
+
+/// Applies one flag that takes a value. A missing or unparsable value leaves
+/// the field as it was.
+fn apply_valued(flags: &mut StartupFlags, name: &str, value: Option<String>) {
+    let Some(value) = value else { return };
+    match name {
+        "--screen" => flags.screen = parse_screen(&value).or(flags.screen),
+        "--theme" => flags.theme = parse_theme(&value).or(flags.theme),
+        "--window" => flags.window = parse_window(&value).unwrap_or(flags.window),
+        "--db" => flags.db = Some(PathBuf::from(value)),
+        "--settings" => flags.settings = Some(PathBuf::from(value)),
+        "--scroll" => flags.scroll = parse_scroll(&value).or(flags.scroll),
+        _ => {}
+    }
 }
 
 fn parse_screen(value: &str) -> Option<Screen> {

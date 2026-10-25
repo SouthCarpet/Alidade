@@ -1,52 +1,64 @@
 {
-  "version": 1,
+  "version": 3,
   "neutrals": {
     "light": {
-      "background": {"l": 0.98, "c": 0.012, "h": 260},
-      "well": {"l": 0.96, "c": 0.012, "h": 260},
-      "surface-raised": {"l": 1.00, "c": 0.012, "h": 260},
-      "border": {"l": 0.82, "c": 0.012, "h": 260},
-      "border-top": {"l": 0.88, "c": 0.012, "h": 260},
-      "milled": {"l": 1, "c": 0, "h": 0, "a": 0},
-      "text": {"l": 0.18, "c": 0.012, "h": 260},
-      "text-muted": {"l": 0.42, "c": 0.012, "h": 260},
-      "disabled-fill": {"l": 0.82, "c": 0, "h": 0},
-      "scrim": {"l": 0.18, "c": 0.012, "h": 260, "a": 0.36}
+      "background": {"l": 0.96, "c": 0.006, "h": 200},
+      "well": {"l": 0.935, "c": 0.008, "h": 200},
+      "surface-raised": {"l": 0.995, "c": 0.004, "h": 200},
+      "surface-hover": {"l": 0.955, "c": 0.012, "h": 195},
+      "surface-active": {"l": 0.915, "c": 0.014, "h": 195},
+      "border": {"l": 0.82, "c": 0.01, "h": 200},
+      "border-strong": {"l": 0.45, "c": 0.012, "h": 200},
+      "control": {"l": 0.55, "c": 0.012, "h": 200},
+      "text": {"l": 0.18, "c": 0.01, "h": 200},
+      "text-muted": {"l": 0.40, "c": 0.012, "h": 200},
+      "disabled-text": {"l": 0.54, "c": 0, "h": 0},
+      "disabled-fill": {"l": 0.90, "c": 0, "h": 0},
+      "scrim": {"l": 0.18, "c": 0.01, "h": 200, "a": 0.4}
     },
     "dark": {
-      "background": {"l": 0.14, "c": 0.012, "h": 260},
-      "well": {"l": 0.11, "c": 0.012, "h": 260},
-      "surface-raised": {"l": 0.20, "c": 0.012, "h": 260},
-      "border": {"l": 0.32, "c": 0.012, "h": 260},
-      "border-top": {"l": 0.32, "c": 0.012, "h": 260},
-      "milled": {"l": 1, "c": 0, "h": 0, "a": 0.04},
-      "text": {"l": 0.95, "c": 0.012, "h": 260},
-      "text-muted": {"l": 0.72, "c": 0.012, "h": 260},
-      "disabled-fill": {"l": 0.28, "c": 0, "h": 0},
-      "scrim": {"l": 0.05, "c": 0.012, "h": 260, "a": 0.5}
+      "background": {"l": 0.145, "c": 0.01, "h": 200},
+      "well": {"l": 0.11, "c": 0.01, "h": 200},
+      "surface-raised": {"l": 0.185, "c": 0.01, "h": 200},
+      "surface-hover": {"l": 0.225, "c": 0.014, "h": 195},
+      "surface-active": {"l": 0.265, "c": 0.016, "h": 195},
+      "border": {"l": 0.33, "c": 0.012, "h": 200},
+      "border-strong": {"l": 0.70, "c": 0.012, "h": 200},
+      "control": {"l": 0.60, "c": 0.015, "h": 200},
+      "text": {"l": 0.95, "c": 0.008, "h": 200},
+      "text-muted": {"l": 0.82, "c": 0.012, "h": 200},
+      "disabled-text": {"l": 0.62, "c": 0, "h": 0},
+      "disabled-fill": {"l": 0.27, "c": 0, "h": 0},
+      "scrim": {"l": 0.05, "c": 0.01, "h": 200, "a": 0.55}
     }
   },
   "accent_family": {
-    "_comment": "Template/rule, not expanded values. Hue (h) comes from each app's accent_hue. Deltas apply to the accent l/c above. Council canon corrections (plan 051) win over the winner render's dark hover/active/soft values.",
+    "_comment": "Direction A, Register (plan 094 revision 2, ledger 7753). Template/rule, not expanded values. Hue (h) comes from each app's accent_hue. Deltas apply to the accent l/c above. selected = the selected-row fill: l as given, c = accent c * c_factor, at the accent hue. ink (plan 125, spec R25) = the one dark block per page, dark in both themes, every part {l, c} at the accent hue: fill, text, muted, rule, action (a button on ink) and on_action (its label). The tinted section field is soft. An app with accent2_hue gets three quieter tone tokens at that hue (accent2, lane k12): accent2-field at the soft l, c = min(c_max, c_factor * the primary soft c); accent2-highlight at the selected l, c = min(c_max, c_factor * the primary selected c); accent2-mark at the dataviz.series_color l, c = min(c_max, c_factor * the primary accent c). Then c drops at fixed l and h until the colour is inside sRGB.",
     "light": {
-      "accent": {"l": 0.46, "c": 0.13},
-      "hover": {"l_delta": -0.04},
-      "active": {"l_delta": -0.08, "c_delta": 0.01},
-      "soft": {"l": 0.94, "c_factor": 0.35, "c_max": 0.06},
-      "soft_active": {"c_delta": 0.01},
-      "soft_foreground": {"l": 0.35, "c_factor": 0.6, "min_contrast": 4.5},
-      "focus": {"l": 0.55, "ring_width_px": 2, "ring_offset_px": 2, "min_contrast": 3},
-      "on_accent": {"l": 0.99, "c": 0, "h": 0}
+      "accent": {"l": 0.43, "c": 0.09},
+      "hover": {"l_delta": -0.05},
+      "active": {"l_delta": -0.10},
+      "soft": {"l": 0.92, "c_factor": 0.333333, "c_max": 0.06},
+      "soft_active": {"l_delta": -0.03, "c_delta": 0.01},
+      "soft_foreground": {"l": 0.32, "c_factor": 0.777778, "min_contrast": 4.5},
+      "selected": {"l": 0.82, "c_factor": 0.666667},
+      "focus": {"l": 0.5, "c": 0.10, "ring_width_px": 2, "ring_offset_px": 2, "min_contrast": 3},
+      "on_accent": {"l": 0.99, "c": 0, "h": 0},
+      "ink": {"fill": {"l": 0.22, "c": 0.025}, "text": {"l": 0.96, "c": 0.008}, "muted": {"l": 0.80, "c": 0.014}, "rule": {"l": 0.45, "c": 0.02}, "action": {"l": 0.82, "c": 0.11}, "on_action": {"l": 0.18, "c": 0.02}},
+      "accent2": {"field": {"c_factor": 0.75, "c_max": 0.020}, "highlight": {"c_factor": 0.75, "c_max": 0.040}, "mark": {"c_factor": 0.8, "c_max": 0.080}}
     },
     "dark": {
-      "accent": {"l": 0.73, "c": 0.11},
+      "accent": {"l": 0.76, "c": 0.10},
       "hover": {"l_delta": 0.04},
-      "active": {"l_delta": 0.08, "c_delta": 0.01},
-      "soft": {"l": 0.26, "c_factor": 0.35, "c_max": 0.06},
-      "soft_active": {"c_delta": 0.01},
+      "active": {"l_delta": 0.08},
+      "soft": {"l": 0.27, "c_factor": 0.4, "c_max": 0.06},
+      "soft_active": {"l_delta": 0.04, "c_delta": 0.01},
       "soft_foreground": {"l": 0.88, "c_factor": 0.6, "min_contrast": 4.5},
-      "focus": {"l": 0.70, "ring_width_px": 2, "ring_offset_px": 2, "min_contrast": 3},
-      "on_accent": {"l": 0.14, "c": 0.012, "h": 260}
+      "selected": {"l": 0.42, "c_factor": 0.7},
+      "focus": {"l": 0.72, "ring_width_px": 2, "ring_offset_px": 2, "min_contrast": 3},
+      "on_accent": {"l": 0.15, "c": 0.01, "h": 200},
+      "ink": {"fill": {"l": 0.33, "c": 0.035}, "text": {"l": 0.96, "c": 0.008}, "muted": {"l": 0.84, "c": 0.016}, "rule": {"l": 0.52, "c": 0.03}, "action": {"l": 0.82, "c": 0.11}, "on_action": {"l": 0.18, "c": 0.02}},
+      "accent2": {"field": {"c_factor": 0.75, "c_max": 0.025}, "highlight": {"c_factor": 0.75, "c_max": 0.045}, "mark": {"c_factor": 0.8, "c_max": 0.090}}
     }
   },
   "status": {
@@ -72,33 +84,80 @@
     }
   },
   "dataviz": {
-    "_comment": "Six series total: series 1 = app accent hue, slots 2-6 = first five of anchor_hues after removing any anchor within accent_exclusion_deg of the accent hue (append spare_hue if fewer than five remain). Council canon correction 3 - not the winner's own anchors.",
+    "_comment": "One-hue ramp (direction A, SLOP-COLOR-07): all six series use the app's accent hue, six lightness steps. Identity comes from the dash pattern in stroke_patterns (dash lengths in px, series i uses pattern i), not from six hues. series_color is only the l/c of a formula: series extra (an app's named identity colour), never a chart series. accent_exclusion_deg is the hue-collision gate distance to the status hues.",
+    "ramp": {
+      "light": [
+        {"l": 0.30, "c": 0.07},
+        {"l": 0.36, "c": 0.07},
+        {"l": 0.42, "c": 0.07},
+        {"l": 0.47, "c": 0.07},
+        {"l": 0.51, "c": 0.07},
+        {"l": 0.55, "c": 0.07}
+      ],
+      "dark": [
+        {"l": 0.92, "c": 0.06},
+        {"l": 0.86, "c": 0.07},
+        {"l": 0.80, "c": 0.08},
+        {"l": 0.74, "c": 0.09},
+        {"l": 0.70, "c": 0.09},
+        {"l": 0.66, "c": 0.09}
+      ]
+    },
     "series_color": {
       "light": {"l": 0.52, "c": 0.13},
       "dark": {"l": 0.72, "c": 0.11}
     },
-    "anchor_hues": [250, 40, 165, 25, 330, 200],
-    "spare_hue": 300,
     "accent_exclusion_deg": 20,
-    "anchor_slots": 5,
     "band_alpha": 0.12,
-    "grid_alpha": 0.4,
+    "grid_alpha": {"light": 0.6, "dark": 0.7},
     "history_chroma_factor": 0.6,
-    "stroke_patterns": ["solid", "dashed", "dotted", "dash-dot", "long-dash", "dash-dot-dot"]
+    "stroke_patterns": [
+      {"name": "solid", "dash": []},
+      {"name": "dashed", "dash": [10, 6]},
+      {"name": "dotted", "dash": [2, 5]},
+      {"name": "dash-dot", "dash": [12, 5, 2, 5]},
+      {"name": "long-dash", "dash": [24, 8]},
+      {"name": "dash-dot-dot", "dash": [12, 5, 2, 5, 2, 5]}
+    ]
   },
-  "space": {"1": 4, "2": 8, "3": 12, "4": 16, "6": 24, "8": 32},
-  "radius": {"sm": 4, "md": 6, "lg": 8, "pill": 999},
+  "space": {"1": 4, "2": 8, "3": 12, "4": 16, "6": 24, "8": 32, "12": 48},
+  "radius": {"sm": 2, "md": 3, "lg": 4, "pill": 999},
   "type": {
-    "xs": 12, "sm": 14, "md": 16, "lg": 20, "xl": 24, "2xl": 28, "3xl": 32,
-    "font_sans": "'Inter',system-ui,-apple-system,'Segoe UI',sans-serif",
-    "numerals": "tnum lnum"
+    "xs": 13, "sm": 14, "body": 15, "md": 16, "lg": 20, "xl": 24, "2xl": 28, "3xl": 32,
+    "read": 17, "read_leading": 1.55, "read_measure_ch": 66,
+    "display_steps": [40, 52, 68], "display_leading": 1.08,
+    "font_sans": "'Fira Sans','Segoe UI','Helvetica Neue',Arial,sans-serif",
+    "numerals": "tnum lnum",
+    "display": {"min": 40, "vw": 5, "max": 52}
   },
-  "motion": {"fast": 80, "base": 120, "draw": 240, "live": 1200, "ease_standard": "cubic-bezier(.2,0,0,1)"},
+  "motion": {
+    "_comment": "Lane K2 (plan 094 revision 2, spec R3/R4). Durations in ms: fast 80 = tone steps, focus draw-in, every close; base 120 = menu and popover open, tab underline slide; slow 200 = theme cross-fade, dialog and toast enter. Motion durations stay in 80 to 200 (check_tokens.py enforces it). draw 240 = a series first-draw, live 1200 = one turn of the header activity line, the only loop. ease_standard is an ease-out. ease_loop is the loop easing. Offsets in px: offset_press = the pressed-button downward translate, offset_enter = the toast start distance from its edge, offset_focus = how far outside its resting offset the focus ring starts before it draws in. scale_enter = the start scale of a menu, popover and dialog (a number, not px). scale_mark = the start scale of a mark that appears inside a control, growing from the centre of the control itself (the radio dot; lane K4, spec R9). tooltip_delay = ms a hover or focus waits before a tooltip opens (a delay, not a motion, so outside the 80 to 200 range; lane K5). ink_hold = ms that fresh ink (the accent soft tone on a changed cell) stays before it fades back over slow (a delay, not a motion, kept in 200 to 2000; lane K6, spec R18). ink_cap_per_second = a whole count, not a time: above this many ink changes per second in one view no cell gets ink and the footer says what changed (lane K6, spec R18). Plan 125 (spec R32): after one user action the motion follows cause then effect: at most sequence_moves (a count) related moves, sequence_step ms apart (40 to 60), all inside sequence_max ms (at most 320). A total draws its double rule over base; an image carries to its detail view over slow. Never a hover lift or a bounce (catalog SLOP-MOTION-02, -03).",
+    "fast": 80,
+    "base": 120,
+    "slow": 200,
+    "draw": 240,
+    "live": 1200,
+    "ease_standard": "cubic-bezier(.2,0,0,1)",
+    "ease_loop": "linear",
+    "offset_press": 1,
+    "offset_enter": 8,
+    "offset_focus": 3,
+    "scale_enter": 0.98,
+    "scale_mark": 0.5,
+    "tooltip_delay": 500,
+    "ink_hold": 1600,
+    "ink_cap_per_second": 6,
+    "sequence_step": 50,
+    "sequence_max": 320,
+    "sequence_moves": 3
+  },
   "shadow": {
-    "raise": {
-      "light": {"x": 0, "y": 1, "blur": 4, "color": {"l": 0.18, "c": 0.012, "h": 260, "a": 0.06}},
-      "dark": {"x": 0, "y": 1, "blur": 4, "color": {"l": 0.02, "c": 0.012, "h": 260, "a": 0.24}}
+    "_comment": "Kaliber has no shadow: --shadow-raise is none. This is only the colour an app's overrides.shadow_raise layers use (alpha comes from each layer).",
+    "color": {
+      "light": {"l": 0.18, "c": 0.01, "h": 200},
+      "dark": {"l": 0.02, "c": 0.01, "h": 200}
     }
   },
-  "misc": {"control_h": 32}
+  "misc": {"control_h": 32},
+  "control": {"touch": 44}
 }

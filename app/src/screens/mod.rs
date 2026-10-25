@@ -13,12 +13,40 @@ use crate::theme::Palette;
 use crate::ui::{font_medium, font_numeric, font_regular};
 
 pub mod continuous;
+#[path = "../drawing.rs"]
+pub mod drawing;
+pub mod help;
 pub mod history;
 pub mod home;
 pub mod ping_monitor;
 pub mod settings;
 
 pub(crate) const TABLE_VISIBLE_ROWS: usize = 8;
+
+pub(crate) fn page_head<'a>(
+    palette: Palette,
+    title: &'static str,
+    metadata: String,
+) -> Element<'a, Message> {
+    let metadata = metadata.split_whitespace().collect::<Vec<_>>().join(" ");
+    column![
+        text(title)
+            .size(TYPE.xxxl)
+            .font(iced::Font {
+                weight: iced::font::Weight::Semibold,
+                ..font_regular()
+            })
+            .color(palette.text()),
+        text(metadata)
+            .size(TYPE.sm)
+            .font(font_numeric())
+            .color(palette.muted())
+            .wrapping(text::Wrapping::None),
+    ]
+    .spacing(SPACE.s1)
+    .width(Fill)
+    .into()
+}
 
 /// How many of the newest in-range rounds the table shows.
 pub(crate) fn newest_rows(rows: &[RoundRow], n: usize) -> Vec<RoundRow> {
@@ -126,28 +154,6 @@ pub(crate) fn countdown_label(now: SystemTime, deadline: SystemTime, running: bo
     }
 }
 
-pub(crate) fn status_pill<'a>(palette: Palette, label: String) -> Element<'a, Message> {
-    let background = Color::from(palette.theme.accent_soft);
-    let foreground = Color::from(palette.theme.accent_soft_foreground);
-    container(
-        text(label)
-            .size(TYPE.xs)
-            .font(font_medium())
-            .color(foreground),
-    )
-    .padding([SPACE.s1, SPACE.s3])
-    .style(move |_| {
-        container::Style::default()
-            .background(background)
-            .border(Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: iced::border::radius(RADIUS.pill),
-            })
-    })
-    .into()
-}
-
 pub(crate) fn toast_view<'a>(palette: Palette, toast: &Toast) -> Element<'a, Message> {
     let dot_color = if toast.ok {
         palette.success()
@@ -174,7 +180,6 @@ pub(crate) fn toast_view<'a>(palette: Palette, toast: &Toast) -> Element<'a, Mes
         .style(palette.btn_ghost())
         .on_press(Message::DismissToast);
     palette.well_frame(
-        false,
         row![
             dot,
             text(toast.message.clone())
@@ -198,46 +203,168 @@ fn hairline<'a>(palette: Palette) -> Element<'a, Message> {
     .into()
 }
 
-fn header_cell<'a>(palette: Palette, label: &'static str, portion: u16) -> Element<'a, Message> {
-    text(label)
-        .size(TYPE.xs)
-        .font(font_medium())
-        .color(palette.muted())
-        .width(Length::FillPortion(portion))
-        .into()
+#[derive(Clone, Copy)]
+pub enum RoundColumn {
+    Time,
+    Down,
+    Up,
+    PingIdle,
+    PingLoad,
+    Jitter,
+    Loss,
 }
 
-fn time_cell<'a>(palette: Palette, value: String, portion: u16) -> Element<'a, Message> {
-    text(value)
-        .size(TYPE.sm)
-        .font(font_regular())
-        .color(palette.text())
-        .width(Length::FillPortion(portion))
-        .into()
+impl RoundColumn {
+    pub fn alignment(self) -> iced::alignment::Horizontal {
+        match self {
+            Self::Time => iced::alignment::Horizontal::Left,
+            _ => iced::alignment::Horizontal::Right,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Time => "Time",
+            Self::Down => "Down",
+            Self::Up => "Up",
+            Self::PingIdle => "Ping idle",
+            Self::PingLoad => "Ping load",
+            Self::Jitter => "Jitter",
+            Self::Loss => "Loss",
+        }
+    }
 }
 
-fn numeric_cell<'a>(palette: Palette, value: String, portion: u16) -> Element<'a, Message> {
-    text(value)
-        .size(TYPE.sm)
-        .font(font_numeric())
-        .color(palette.text())
-        .align_x(iced::alignment::Horizontal::Right)
+fn round_cell(
+    palette: Palette,
+    column: RoundColumn,
+    portion: u16,
+    value: Option<String>,
+) -> iced::widget::Text<'static> {
+    let header = value.is_none();
+    text(value.unwrap_or_else(|| column.label().into()))
+        .align_x(column.alignment())
         .width(Length::FillPortion(portion))
-        .into()
+        .size(if header { TYPE.xs } else { TYPE.sm })
+        .font(if header {
+            font_medium()
+        } else if matches!(column, RoundColumn::Time) {
+            font_regular()
+        } else {
+            font_numeric()
+        })
+        .color(if header {
+            palette.muted()
+        } else {
+            palette.text()
+        })
+}
+
+fn header_cell(palette: Palette, column: RoundColumn, portion: u16) -> iced::widget::Text<'static> {
+    round_cell(palette, column, portion, None)
+}
+
+fn time_cell(palette: Palette, value: String, portion: u16) -> iced::widget::Text<'static> {
+    round_cell(palette, RoundColumn::Time, portion, Some(value))
+}
+
+fn numeric_cell(
+    palette: Palette,
+    value: String,
+    portion: u16,
+    column: RoundColumn,
+) -> iced::widget::Text<'static> {
+    round_cell(palette, column, portion, Some(value))
+}
+
+#[cfg(test)]
+mod round_cell_tests {
+    use super::*;
+    use iced::advanced::{
+        layout, renderer::Headless, text::Renderer as TextRenderer, widget::Tree,
+    };
+    use iced::alignment::Horizontal;
+
+    fn built_alignment(
+        cell: iced::widget::Text<'static>,
+        renderer: &iced::Renderer,
+    ) -> iced::advanced::text::Alignment {
+        let mut element: Element<'static, Message> = cell.into();
+        let mut tree = Tree::new(element.as_widget());
+        element.as_widget_mut().layout(
+            &mut tree,
+            renderer,
+            &layout::Limits::new(iced::Size::ZERO, iced::Size::new(200.0, 40.0)),
+        );
+        tree.state
+            .downcast_ref::<iced::widget::text::State<<iced::Renderer as TextRenderer>::Paragraph>>(
+            )
+            .align_x()
+    }
+
+    #[tokio::test]
+    async fn rounds_numeric_columns_align_headers_and_values_right() {
+        // R2-F1: every numeric header and value must build a right-aligned paragraph.
+        let renderer =
+            iced::Renderer::new(iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"))
+                .await
+                .expect("headless text renderer");
+        for column in [
+            RoundColumn::Down,
+            RoundColumn::Up,
+            RoundColumn::PingIdle,
+            RoundColumn::PingLoad,
+            RoundColumn::Jitter,
+            RoundColumn::Loss,
+        ] {
+            let header = header_cell(Palette::light(), column, 2);
+            let value = numeric_cell(Palette::light(), "42.9".into(), 2, column);
+            assert_eq!(
+                built_alignment(header, &renderer),
+                Horizontal::Right.into(),
+                "numeric header"
+            );
+            assert_eq!(
+                built_alignment(value, &renderer),
+                Horizontal::Right.into(),
+                "numeric value"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn time_header_and_value_keep_left_alignment() {
+        // The p3 table contract keeps Time headers and timestamp values left-aligned.
+        let renderer =
+            iced::Renderer::new(iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"))
+                .await
+                .expect("headless text renderer");
+        assert_eq!(
+            built_alignment(
+                header_cell(Palette::light(), RoundColumn::Time, 3),
+                &renderer
+            ),
+            Horizontal::Left.into()
+        );
+        assert_eq!(
+            built_alignment(time_cell(Palette::light(), "12:34:56".into(), 3), &renderer),
+            Horizontal::Left.into()
+        );
+    }
 }
 
 fn table_header(palette: Palette) -> Element<'static, Message> {
     row![
-        header_cell(palette, "Time", 3),
+        header_cell(palette, RoundColumn::Time, 3),
         hairline(palette),
-        header_cell(palette, "Down", 2),
-        header_cell(palette, "Up", 2),
+        header_cell(palette, RoundColumn::Down, 2),
+        header_cell(palette, RoundColumn::Up, 2),
         hairline(palette),
-        header_cell(palette, "Ping idle", 2),
-        header_cell(palette, "Ping load", 2),
+        header_cell(palette, RoundColumn::PingIdle, 2),
+        header_cell(palette, RoundColumn::PingLoad, 2),
         hairline(palette),
-        header_cell(palette, "Jitter", 2),
-        header_cell(palette, "Loss", 2),
+        header_cell(palette, RoundColumn::Jitter, 2),
+        header_cell(palette, RoundColumn::Loss, 2),
     ]
     .spacing(SPACE.s2)
     .align_y(Alignment::Center)
@@ -249,14 +376,24 @@ fn table_row<'a>(palette: Palette, row: &RoundRow) -> Element<'a, Message> {
     row![
         time_cell(palette, format_time(row.started_at), 3),
         hairline(palette),
-        numeric_cell(palette, format_mbit(row.down_bps), 2),
-        numeric_cell(palette, format_mbit(row.up_bps), 2),
+        numeric_cell(palette, format_mbit(row.down_bps), 2, RoundColumn::Down),
+        numeric_cell(palette, format_mbit(row.up_bps), 2, RoundColumn::Up),
         hairline(palette),
-        numeric_cell(palette, format_ms(row.ping_idle_ms), 2),
-        numeric_cell(palette, format_ms(ping_load_ms(row)), 2),
+        numeric_cell(
+            palette,
+            format_ms(row.ping_idle_ms),
+            2,
+            RoundColumn::PingIdle
+        ),
+        numeric_cell(
+            palette,
+            format_ms(ping_load_ms(row)),
+            2,
+            RoundColumn::PingLoad
+        ),
         hairline(palette),
-        numeric_cell(palette, format_ms(row.jitter_ms), 2),
-        numeric_cell(palette, format_pct(row.loss_pct), 2),
+        numeric_cell(palette, format_ms(row.jitter_ms), 2, RoundColumn::Jitter),
+        numeric_cell(palette, format_pct(row.loss_pct), 2, RoundColumn::Loss),
     ]
     .spacing(SPACE.s2)
     .align_y(Alignment::Center)
@@ -265,6 +402,29 @@ fn table_row<'a>(palette: Palette, row: &RoundRow) -> Element<'a, Message> {
 }
 
 pub(crate) fn rounds_table<'a>(palette: Palette, rows: &[RoundRow]) -> Element<'a, Message> {
+    let row_h = TYPE.sm + SPACE.s2 * 2.0;
+    rounds_table_sized(
+        palette,
+        rows,
+        Length::Fixed(row_h * ((TABLE_VISIBLE_ROWS + 1) as f32)),
+    )
+}
+
+pub(crate) fn adaptive_rounds_table<'a>(
+    palette: Palette,
+    rows: &[RoundRow],
+) -> Element<'a, Message> {
+    container(rounds_table_sized(palette, rows, Fill))
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+fn rounds_table_sized<'a>(
+    palette: Palette,
+    rows: &[RoundRow],
+    height: Length,
+) -> Element<'a, Message> {
     let mut body: Vec<Element<'a, Message>> = vec![table_header(palette)];
     if rows.is_empty() {
         body.push(
@@ -279,8 +439,6 @@ pub(crate) fn rounds_table<'a>(palette: Palette, rows: &[RoundRow]) -> Element<'
             body.push(table_row(palette, row));
         }
     }
-    let row_h = TYPE.sm + SPACE.s2 * 2.0;
-    let height = row_h * ((TABLE_VISIBLE_ROWS + 1) as f32);
     // F2 (Task 7 fix wave): a default scrollbar floats over the content, so
     // it covered the rightmost (Loss) column at the table's right edge —
     // in both History and here (Continuous shares this helper). An
@@ -288,10 +446,13 @@ pub(crate) fn rounds_table<'a>(palette: Palette, rows: &[RoundRow]) -> Element<'
     // columns never sit under it.
     let gutter = scrollable::Scrollbar::new().spacing(SPACE.s2);
     palette.well_frame(
-        true,
-        scrollable(column(body).spacing(SPACE.s2).width(Fill))
-            .height(Length::Fixed(height))
-            .direction(scrollable::Direction::Vertical(gutter)),
+        container(
+            scrollable(column(body).spacing(SPACE.s2).width(Fill))
+                .height(Fill)
+                .direction(scrollable::Direction::Vertical(gutter)),
+        )
+        .height(height)
+        .width(Fill),
     )
 }
 
@@ -312,6 +473,56 @@ pub(crate) fn with_toast<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn table_row_keeps_each_measurement_in_its_own_aligned_column() {
+        // R3/M5: distinct values must reach Time/Down/Up/Idle/Load/Jitter/Loss in order.
+        // Oracle: the shared seven-column table contract, with Time left and numbers right.
+        use iced::advanced::{layout, renderer::Headless, text::Renderer, widget::Tree};
+        use iced::alignment::Horizontal::{Left, Right};
+
+        let renderer =
+            iced::Renderer::new(iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"))
+                .await
+                .expect("headless table renderer");
+        let mut row = stub_row(UNIX_EPOCH);
+        row.down_bps = Some(94_030_000.0);
+        row.up_bps = Some(27_890_000.0);
+        row.ping_idle_ms = Some(13.7);
+        row.ping_down_ms = Some(40.0);
+        row.ping_up_ms = Some(45.8);
+        row.jitter_ms = Some(2.3);
+        row.loss_pct = Some(1.25);
+        let mut element = table_row(Palette::light(), &row);
+        let mut tree = Tree::new(element.as_widget());
+        element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(iced::Size::ZERO, iced::Size::new(1200.0, 40.0)),
+        );
+        let actual: Vec<_> = [0, 2, 3, 5, 6, 8, 9]
+            .into_iter()
+            .map(|index| {
+                let paragraph = tree.children[index].state.downcast_ref::<
+                iced::widget::text::State<<iced::Renderer as Renderer>::Paragraph>
+            >();
+                (paragraph.content().trim(), paragraph.align_x())
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                ("1970-01-01 00:00", Left.into()),
+                ("94.03", Right.into()),
+                ("27.89", Right.into()),
+                ("13.7", Right.into()),
+                ("42.9", Right.into()),
+                ("2.3", Right.into()),
+                ("1.25", Right.into()),
+            ],
+            "table row values and column alignment"
+        );
+    }
 
     #[test]
     fn a_missing_throughput_is_not_a_zero() {

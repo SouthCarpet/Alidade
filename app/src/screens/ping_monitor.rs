@@ -107,7 +107,6 @@ fn target_row<'a>(palette: Palette, target: &TargetLive) -> Element<'a, Message>
     .height(Length::Fixed(SPACE.s6));
 
     palette.card(
-        true,
         row![
             text(target.name.clone())
                 .size(TYPE.sm)

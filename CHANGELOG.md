@@ -6,9 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-25
+
+### Added
+
+- A latest-round Home diagram with separate Mbit/s bars and ms marks, a text ping difference, and an honest missing-round reason. New results draw in over 220 ms; reduced motion shows the final marks at once.
+
+- Page heads on Home, Settings, and Continuous, with one metadata line per screen.
+- One Home summary with four measured facts, missing-value reasons, and full reasons on hover.
+- A Home activity line that enters by position and alpha, then stays still while the round runs. Reduced motion shows its final state at once.
+
+- Load the latest stored round on Home at start, including rounds older than the chart window. Show a store read failure with its reason.
+
+- Searchable Help on every screen and F1, with ping and jitter hints. Ctrl+, opens Settings. Escape clears Help search before closing Help and returning focus. Help and Undo show at once, including with reduced motion.
+
+- A 10-second Undo toast for target removal, with Ctrl+Z support and full restoration of the target and its port input.
+
+- Header with the Alidade mark and name, a theme quick switch, and a Light/Dark/System segmented control in Settings.
+- About as the last Settings section: version, opt-in update checks at start, on opening About, and on Check now, with the last result and time for this session.
+
 ### Changed
 
+- Add labelled line samples with matching strokes to each Continuous plot. Align numeric table headers with their values in Continuous and History. Show Home latency scale ends with one decimal, like the summary.
+- Refresh the vendored Kaliber dark neutrals through the vendor sync script.
+- Replace the Settings unverified pill with plain AA-contrast state text.
+- Separate Continuous throughput, latency and loss plots so each unit has its own scale. Remove the synthetic download range.
+- Keep fractional chart tick labels distinct on scales with a span below four units.
+
+- Replace the five Home KPI tiles and the empty-state circle with compact data and text guidance. Show idle packet loss below the summary.
+- Replace the Continuous status pill with plain metadata. Keep a complete table row visible at minimum height and use the remaining space for scrolling.
+- Use the 16 px shell section gap and tabular numbers in page metadata.
+
+- Escape clears Help search before closing Help, or dismisses Undo when Help is closed. Ctrl+Z leaves target removal unchanged while a text input has focus.
+- About uses the actions Show About and Hide About.
+
+- Mark the active tab with a fill and a small square instead of an edge underline.
+
+- Set the desktop minimum window size to 1008 x 640. The default remains 1280 x 800.
+- Show all update-check text in English. Checks remain off by default and every trigger uses the same consent gate.
+
+- Use Fira Sans for text and Fira Sans Tabular for metric numbers and chart labels, with a plain zero.
+
+- Refresh design tokens to 0.10.0. Raised panes and wells use flat fills and 1 px hairlines. Remove the top highlight strips and card shadows.
+
+- Settings: the page scrollbar has its own gutter, so it no longer covers the targets table or "Add target".
+
+- Size the chart side margins from the widest axis label, so a label of three or four digits shows in full.
+
+- Set the Rust cognitive complexity limit to 12 (`clippy.toml`). Three store tests and the startup flag parser were split into helpers to meet it. No assertion or flag behaviour changed.
 - CI and release workflows use Node 24 actions: `actions/checkout` v7, `actions/cache` v6, `softprops/action-gh-release` v3.
+
+### Fixed
+
+- Isolate bulk loopback traffic in the provider integration tests. Keep the original assertions and timing budgets.
 
 ## [0.1.0] - 2026-08-30
 

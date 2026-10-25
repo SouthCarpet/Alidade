@@ -69,6 +69,157 @@ pub struct RoundOutcome {
     pub persist_error: Option<String>,
 }
 
+/// Stored rows stay distinct from live results because the store does not
+/// retain every sample count and duration from a live round.
+#[derive(Debug, Clone)]
+pub enum LatestRound {
+    Live(Box<RoundOutcome>),
+    Stored(Box<RoundRow>),
+}
+
+impl LatestRound {
+    pub fn started_at(&self) -> SystemTime {
+        match self {
+            Self::Live(outcome) => outcome.result.started_at,
+            Self::Stored(row) => row.started_at,
+        }
+    }
+
+    pub(crate) fn capped(&self) -> bool {
+        match self {
+            Self::Live(outcome) => outcome.result.capped,
+            Self::Stored(row) => row.capped,
+        }
+    }
+
+    pub(crate) fn persist_error(&self) -> Option<&str> {
+        match self {
+            Self::Live(outcome) => outcome.persist_error.as_deref(),
+            Self::Stored(_) => None,
+        }
+    }
+}
+
+/// The line moves as a whole. Its width never encodes invented progress.
+#[derive(Debug, Clone, Copy)]
+pub struct ActivityFrame {
+    pub offset: f32,
+    pub alpha: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActivityLine {
+    started: Option<Instant>,
+    reduced: bool,
+}
+
+impl ActivityLine {
+    pub fn new(reduced: bool) -> Self {
+        Self {
+            started: None,
+            reduced,
+        }
+    }
+
+    pub fn start(&mut self, at: Instant) {
+        self.started = Some(at);
+    }
+
+    pub fn stop(&mut self) {
+        self.started = None;
+    }
+
+    pub fn frame(&self, at: Instant) -> Option<ActivityFrame> {
+        let started = self.started?;
+        let progress = if self.reduced {
+            1.0
+        } else {
+            Palette::activity_progress(at.saturating_duration_since(started))
+        };
+        Some(ActivityFrame {
+            offset: (progress - 1.0) * Palette::activity_offset(),
+            alpha: progress,
+        })
+    }
+
+    pub fn is_animating(&self, at: Instant) -> bool {
+        !self.reduced
+            && self.started.is_some_and(|started| {
+                at.saturating_duration_since(started) < Palette::activity_duration()
+            })
+    }
+}
+
+/// Three result groups move as fixed geometry; no intermediate values are shown.
+#[derive(Debug, Clone)]
+pub struct MeasurementDrawIn {
+    started: Instant,
+    reduced: bool,
+}
+
+impl MeasurementDrawIn {
+    pub fn new(started: Instant, reduced: bool) -> Self {
+        Self { started, reduced }
+    }
+
+    pub fn delays(&self) -> [Duration; 3] {
+        Palette::measurement_delays()
+    }
+
+    pub fn duration(&self) -> Duration {
+        self.delays()[2] + Palette::activity_duration()
+    }
+
+    pub fn frames(&self, at: Instant) -> [(f32, f32); 3] {
+        let elapsed = at.saturating_duration_since(self.started);
+        self.delays().map(|delay| {
+            let progress = if self.reduced {
+                1.0
+            } else if elapsed < delay {
+                0.0
+            } else {
+                Palette::activity_progress(elapsed - delay)
+            };
+            ((progress - 1.0) * Palette::activity_offset(), progress)
+        })
+    }
+
+    pub fn is_animating(&self, at: Instant) -> bool {
+        !self.reduced && at.saturating_duration_since(self.started) < self.duration()
+    }
+}
+
+#[cfg(windows)]
+fn reduced_motion() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        #[link_name = "SystemParametersInfoW"]
+        fn system_parameters_info(
+            action: u32,
+            param: u32,
+            value: *mut std::ffi::c_void,
+            flags: u32,
+        ) -> i32;
+    }
+    const GET_CLIENT_AREA_ANIMATION: u32 = 0x1042;
+    let mut enabled = 1_i32;
+    // SAFETY: this GET action writes one BOOL to a valid, aligned local i32.
+    let ok = unsafe {
+        system_parameters_info(
+            GET_CLIENT_AREA_ANIMATION,
+            0,
+            (&mut enabled as *mut i32).cast(),
+            0,
+        )
+    };
+    ok == 0 || enabled == 0
+}
+
+#[cfg(not(windows))]
+fn reduced_motion() -> bool {
+    true
+}
+
 /// One enabled ping-monitor target, with the samples taken this session.
 #[derive(Debug, Clone)]
 pub struct TargetLive {
@@ -83,6 +234,14 @@ pub struct TargetLive {
 pub struct Toast {
     pub ok: bool,
     pub message: String,
+}
+
+/// A reversible removal keeps the original row and unparsed port input together.
+#[derive(Debug, Clone)]
+pub struct RemovedTarget {
+    pub index: usize,
+    pub target: TargetSpec,
+    pub port_text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +269,7 @@ pub enum Message {
     /// in a target's *starting* samples, before any live index is meaningful.
     PingHistoryLoaded(Vec<(String, Vec<PingSample>)>),
     Tick,
+    ActivityTick(Instant),
     StartPingMonitor,
     StopPingMonitor,
     HistoryFromChanged(String),
@@ -122,6 +282,11 @@ pub enum Message {
     SettingChanged(SettingField),
     TargetAdded,
     TargetRemoved(usize),
+    UndoTargetRemoval,
+    EscapePressed,
+    UndoShortcutRequested,
+    UndoShortcutChecked(bool),
+    UndoRemovalExpired(u64),
     TargetToggled(usize),
     /// One field of an existing target row, committed straight to
     /// `Settings::targets[index]`.
@@ -142,14 +307,20 @@ pub enum Message {
     /// pre-work A1). Only consulted when `ui_settings.theme` is
     /// `ThemeMode::System` — see [`App::palette`].
     SystemThemeChanged(iced::theme::Mode),
-    /// The opt-in boot-time GitHub check finished (plan 064 Task 2). `None`
-    /// covers "opted out", "no newer release", and every failure alike —
-    /// the caller never learns which.
+    /// A consented update check finished. None means no newer release.
     UpdateChecked(Option<update::Release>),
-    /// The header's "Dostupná je verzia" link was pressed. Opens
-    /// `App::available_update`'s release page in the browser; never
-    /// downloads anything.
+    /// Open the available release page in the browser, without a download.
     OpenReleasePage,
+    AboutToggled,
+    CheckUpdatesNow,
+    UpdateCheckFailed(String),
+    QuickThemeSwitch,
+    HelpRequested,
+    HelpOpened(Option<usize>),
+    HelpClosed,
+    HelpSearchChanged(String),
+    MoveFocus(bool),
+    OpenSettings,
 }
 
 /// The application's only long-lived state (plan 052 UI architecture: "a
@@ -169,7 +340,11 @@ pub struct App {
     /// back to in memory are what is actually on disk).
     pub settings_error: Option<String>,
     pub round_running: bool,
-    pub last_round: Option<RoundOutcome>,
+    pub last_round: Option<LatestRound>,
+    pub last_round_error: Option<String>,
+    pub activity: ActivityLine,
+    pub activity_at: Instant,
+    pub measurement_draw_in: Option<MeasurementDrawIn>,
     pub scheduler: Scheduler,
     pub continuous_running: bool,
     pub continuous_paused: bool,
@@ -182,6 +357,8 @@ pub struct App {
     clock_armed: bool,
     pub ping_targets: Vec<TargetLive>,
     pub toast: Option<Toast>,
+    pub removed_target: Option<RemovedTarget>,
+    removal_generation: u64,
     pub load_error: Option<String>,
     /// UI-only preferences (theme, autostart, notification thresholds) —
     /// not part of `engine::Settings`, see `screens::settings`'s module doc.
@@ -221,6 +398,13 @@ pub struct App {
     /// (plan 064 Task 2). `None` until then, and stays `None` when the
     /// check is off, finds nothing newer, or fails.
     pub available_update: Option<update::Release>,
+    pub help_open: bool,
+    pub help_query: String,
+    help_opener: Option<usize>,
+    pub about_open: bool,
+    pub update_checking: bool,
+    pub last_update_result: Option<String>,
+    pub last_update_at: Option<SystemTime>,
 }
 
 impl App {
@@ -266,14 +450,6 @@ impl App {
             Some(ScrollTarget::SettingsNotifications) => scroll_settings_to_notifications_task(),
             None => Task::none(),
         };
-        // Plan 064 Task 2: one opt-in GitHub check, only when the user has
-        // said yes on the Settings screen.
-        let update_task = if wants_update_check(&ui_settings) {
-            update_check_task()
-        } else {
-            Task::none()
-        };
-
         // Spawned here (App::boot runs on the winit thread before `.run()`
         // starts pumping it — see tray.rs's module doc) so the tray's
         // hidden window shares the same message queue the real window uses.
@@ -289,42 +465,62 @@ impl App {
             .or_else(|| tray_error.map(|message| Toast { ok: false, message }));
         // `--screen` (B1) picks the initial tab; unset falls back to Home.
         let screen = flags.screen.unwrap_or_default();
+        let (last_round, last_round_error) =
+            match load_latest_round(&flags.db.unwrap_or_else(default_db_path)) {
+                Ok(round) => (round, None),
+                Err(error) => (None, Some(error)),
+            };
+        let mut app = App {
+            screen,
+            settings,
+            settings_path,
+            settings_error,
+            round_running: false,
+            last_round,
+            last_round_error,
+            activity: ActivityLine::new(reduced_motion()),
+            activity_at: Instant::now(),
+            measurement_draw_in: None,
+            scheduler,
+            continuous_running: false,
+            continuous_paused: false,
+            time_range: TimeRange::default(),
+            chart_rows: Vec::new(),
+            history_from: history_from.clone(),
+            history_to: history_to.clone(),
+            history_rows: Vec::new(),
+            ping_running: false,
+            clock_armed: false,
+            ping_targets,
+            toast,
+            removed_target: None,
+            removal_generation: 0,
+            load_error: None,
+            ui_settings,
+            interval_text,
+            budget_gb_text,
+            notify_ping_ms_text,
+            notify_download_mbit_text,
+            notify_loss_pct_text,
+            target_port_text,
+            new_target: NewTargetForm::default(),
+            tray,
+            window_id: None,
+            start_minimized: flags.minimized,
+            notify_state: NotifyState::default(),
+            system_theme: iced::theme::Mode::None,
+            available_update: None,
+            help_open: false,
+            help_query: String::new(),
+            help_opener: None,
+            about_open: false,
+            update_checking: false,
+            last_update_result: None,
+            last_update_at: None,
+        };
+        let update_task = app.request_update_check();
         (
-            App {
-                screen,
-                settings,
-                settings_path,
-                settings_error,
-                round_running: false,
-                last_round: None,
-                scheduler,
-                continuous_running: false,
-                continuous_paused: false,
-                time_range: TimeRange::default(),
-                chart_rows: Vec::new(),
-                history_from: history_from.clone(),
-                history_to: history_to.clone(),
-                history_rows: Vec::new(),
-                ping_running: false,
-                clock_armed: false,
-                ping_targets,
-                toast,
-                load_error: None,
-                ui_settings,
-                interval_text,
-                budget_gb_text,
-                notify_ping_ms_text,
-                notify_download_mbit_text,
-                notify_loss_pct_text,
-                target_port_text,
-                new_target: NewTargetForm::default(),
-                tray,
-                window_id: None,
-                start_minimized: flags.minimized,
-                notify_state: NotifyState::default(),
-                system_theme: iced::theme::Mode::None,
-                available_update: None,
-            },
+            app,
             Task::batch([
                 load_chart_task(),
                 load_history_task(history_from, history_to),
@@ -357,15 +553,28 @@ impl App {
         }
     }
 
-    /// Window-close and tray-driven events, alongside the existing
-    /// Task-based tick loop (`sleep_then_tick`). `close_requests` has no
-    /// Task equivalent — it must be listened for continuously, not fetched
-    /// once — so these, plus live OS theme changes (A1), are the app's only
-    /// `Subscription`s.
+    /// Window, OS theme, and keyboard events stay subscribed on every screen.
     pub fn subscription(&self) -> Subscription<Message> {
+        let activity = if self.activity.is_animating(self.activity_at)
+            || self
+                .measurement_draw_in
+                .as_ref()
+                .is_some_and(|motion| motion.is_animating(self.activity_at))
+        {
+            window::frames().map(Message::ActivityTick)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
+            activity,
             window::close_requests().map(Message::WindowCloseRequested),
             iced::system::theme_changes().map(Message::SystemThemeChanged),
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key, modifiers, ..
+                }) => shortcut(key, modifiers),
+                _ => None,
+            }),
         ])
     }
 
@@ -396,6 +605,10 @@ impl App {
             Message::TargetsRefreshed(samples) => self.on_targets_refreshed(samples),
             Message::PingHistoryLoaded(history) => self.on_ping_history_loaded(history),
             Message::Tick => self.on_tick(),
+            Message::ActivityTick(at) => {
+                self.activity_at = at;
+                Task::none()
+            }
             Message::StartPingMonitor => self.start_ping_monitor(),
             Message::StopPingMonitor => {
                 self.ping_running = false;
@@ -438,6 +651,24 @@ impl App {
             Message::SettingChanged(field) => self.apply_setting_change(field),
             Message::TargetAdded => self.add_target(),
             Message::TargetRemoved(index) => self.remove_target(index),
+            Message::UndoShortcutRequested => {
+                crate::screens::help::text_input_focused().map(Message::UndoShortcutChecked)
+            }
+            Message::UndoShortcutChecked(true) => Task::none(),
+            Message::UndoShortcutChecked(false) => self.update(Message::UndoTargetRemoval),
+            Message::UndoTargetRemoval => {
+                if self.help_open {
+                    Task::none()
+                } else {
+                    self.undo_target_removal()
+                }
+            }
+            Message::UndoRemovalExpired(generation) => {
+                if generation == self.removal_generation {
+                    self.removed_target = None;
+                }
+                Task::none()
+            }
             Message::TargetToggled(index) => self.toggle_target(index),
             Message::TargetFieldChanged(index, field) => self.edit_target(index, field),
             Message::NewTargetFieldChanged(field) => {
@@ -460,11 +691,133 @@ impl App {
                 self.system_theme = mode;
                 Task::none()
             }
-            Message::UpdateChecked(release) => {
-                self.available_update = release;
+            Message::UpdateChecked(release) => self.finish_update_check(Ok(release)),
+            Message::UpdateCheckFailed(error) => self.finish_update_check(Err(error)),
+            Message::CheckUpdatesNow => self.request_update_check(),
+            Message::AboutToggled => {
+                self.about_open = !self.about_open;
+                if self.about_open {
+                    self.request_update_check()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::HelpRequested => {
+                if self.help_open {
+                    return Task::none();
+                }
+                crate::screens::help::capture_focus().map(Message::HelpOpened)
+            }
+            Message::HelpOpened(opener) => self.open_help(opener),
+            Message::HelpClosed => self.close_help(),
+            Message::EscapePressed => self.escape(),
+            Message::HelpSearchChanged(query) => {
+                self.help_query = query;
                 Task::none()
             }
+            Message::MoveFocus(backwards) => self.move_focus(backwards),
+            Message::OpenSettings => {
+                if !self.help_open {
+                    self.screen = Screen::Settings;
+                }
+                Task::none()
+            }
+            Message::QuickThemeSwitch => {
+                let mode = if self.palette().dark {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                self.apply_setting_change(SettingField::Theme(mode))
+            }
             Message::OpenReleasePage => self.open_release_page(),
+        }
+    }
+
+    fn open_help(&mut self, opener: Option<usize>) -> Task<Message> {
+        if self.help_open {
+            return Task::none();
+        }
+        self.help_opener = opener;
+        self.help_query.clear();
+        self.help_open = true;
+        iced::widget::operation::focus(crate::screens::help::search_id())
+    }
+
+    fn escape(&mut self) -> Task<Message> {
+        if !self.help_open {
+            self.removed_target = None;
+            return Task::none();
+        }
+        if !self.help_query.is_empty() {
+            self.help_query.clear();
+            return Task::none();
+        }
+        self.close_help()
+    }
+
+    fn close_help(&mut self) -> Task<Message> {
+        if !self.help_open {
+            return Task::none();
+        }
+        self.help_open = false;
+        self.help_query.clear();
+        crate::screens::help::restore_focus(self.help_opener.take())
+    }
+
+    fn move_focus(&self, backwards: bool) -> Task<Message> {
+        if self.help_open {
+            return iced::widget::operation::focus(crate::screens::help::search_id());
+        }
+        if backwards {
+            iced::widget::operation::focus_previous()
+        } else {
+            iced::widget::operation::focus_next()
+        }
+    }
+
+    // All entry points pass the same consent gate before creating network work.
+    fn request_update_check(&mut self) -> Task<Message> {
+        if !wants_update_check(&self.ui_settings) || self.update_checking {
+            return Task::none();
+        }
+        self.update_checking = true;
+        update_check_task()
+    }
+
+    fn finish_update_check(
+        &mut self,
+        result: Result<Option<update::Release>, String>,
+    ) -> Task<Message> {
+        self.update_checking = false;
+        if !wants_update_check(&self.ui_settings) {
+            return Task::none();
+        }
+        self.last_update_at = Some(SystemTime::now());
+        self.last_update_result = Some(match result {
+            Ok(release) => {
+                let text = match &release {
+                    Some(release) => format!("Last result: version {} is available.", release.tag),
+                    None => "Last result: you have the latest version.".to_string(),
+                };
+                self.available_update = release;
+                text
+            }
+            Err(error) => format!("Last result: check failed ({error})."),
+        });
+        Task::none()
+    }
+
+    /// Current update-check feedback, including the opt-out state.
+    pub fn update_status(&self) -> &str {
+        if !self.ui_settings.check_updates {
+            "Update checks are off. Enable them below to check GitHub."
+        } else if self.update_checking {
+            "Checking GitHub..."
+        } else {
+            self.last_update_result
+                .as_deref()
+                .unwrap_or("No check in this session.")
         }
     }
 
@@ -520,11 +873,18 @@ impl App {
         }
     }
 
+    fn arm_activity(&mut self) {
+        self.activity = ActivityLine::new(reduced_motion());
+        self.activity_at = Instant::now();
+        self.activity.start(self.activity_at);
+    }
+
     fn start_single_test(&mut self) -> Task<Message> {
         if self.round_running {
             return Task::none();
         }
         self.round_running = true;
+        self.arm_activity();
         let settings = self.settings.clone();
         Task::perform(run_single_test(settings), |outcome| {
             Message::RoundFinished(Box::new(outcome))
@@ -548,6 +908,7 @@ impl App {
 
     fn on_round_finished(&mut self, outcome: RoundOutcome) -> Task<Message> {
         self.round_running = false;
+        self.activity.stop();
         let bytes = outcome
             .result
             .down_load
@@ -555,7 +916,10 @@ impl App {
             .saturating_add(outcome.result.up_load.map_or(0, |window| window.bytes));
         self.scheduler.record_bytes(SystemTime::now(), bytes);
         self.notify_thresholds(&outcome.result);
-        self.last_round = Some(outcome);
+        self.last_round = Some(LatestRound::Live(Box::new(outcome)));
+        self.activity_at = Instant::now();
+        self.measurement_draw_in = Some(MeasurementDrawIn::new(self.activity_at, reduced_motion()));
+        self.last_round_error = None;
         load_chart_task()
     }
 
@@ -597,6 +961,7 @@ impl App {
 
     fn begin_scheduled_round(&mut self, started: SystemTime) -> Task<Message> {
         self.round_running = true;
+        self.arm_activity();
         let plan = self.scheduler.plan_next_round(started);
         self.scheduler.record_round_start(started, plan.kind);
         let settings = self.settings.clone();
@@ -782,6 +1147,10 @@ impl App {
             }
             SettingField::CheckUpdates(value) => {
                 self.ui_settings.check_updates = value;
+                if !value {
+                    self.available_update = None;
+                    self.update_checking = false;
+                }
                 return self.persist_ui_settings();
             }
             SettingField::BudgetEnabled(enabled) => {
@@ -871,10 +1240,36 @@ impl App {
         if index >= self.settings.targets.len() {
             return Task::none();
         }
-        self.settings.targets.remove(index);
-        if index < self.target_port_text.len() {
-            self.target_port_text.remove(index);
-        }
+        let target = self.settings.targets.remove(index);
+        let port_text = if index < self.target_port_text.len() {
+            self.target_port_text.remove(index)
+        } else {
+            port_text_for(&target)
+        };
+        self.removed_target = Some(RemovedTarget {
+            index,
+            target,
+            port_text,
+        });
+        self.removal_generation = self.removal_generation.wrapping_add(1);
+        let generation = self.removal_generation;
+        let expiry = Task::perform(
+            async move {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                generation
+            },
+            Message::UndoRemovalExpired,
+        );
+        Task::batch([self.commit_settings(), expiry])
+    }
+
+    fn undo_target_removal(&mut self) -> Task<Message> {
+        let Some(removed) = self.removed_target.take() else {
+            return Task::none();
+        };
+        let index = removed.index.min(self.settings.targets.len());
+        self.settings.targets.insert(index, removed.target);
+        self.target_port_text.insert(index, removed.port_text);
         self.commit_settings()
     }
 
@@ -1055,28 +1450,24 @@ fn scroll_settings_to_notifications_task() -> Task<Message> {
     ))
 }
 
-/// Pure: whether `App::boot` should schedule the update-check task, given
-/// only the persisted opt-in flag. Kept separate from the async plumbing so
-/// the on/off decision is unit-testable without a `Task`.
+/// Shared consent gate for boot, About opening, and Check now.
 fn wants_update_check(ui: &UiSettings) -> bool {
     ui.check_updates
 }
 
-/// One unauthenticated GitHub check (plan 064 Task 2). The client is built
-/// inside the task, not shared, since this is the only place the app ever
-/// needs one. Every failure — offline, rate limiting, a malformed body —
-/// collapses to `None`, the same as "opted out" or "nothing newer": the UI
-/// never distinguishes them.
+/// One bounded GitHub request; preserve failures for the About result.
 fn update_check_task() -> Task<Message> {
     Task::perform(
         async {
             let client = reqwest::Client::new();
             update::check(env!("CARGO_PKG_VERSION"), &client)
                 .await
-                .ok()
-                .flatten()
+                .map_err(|error| error.to_string())
         },
-        Message::UpdateChecked,
+        |result| match result {
+            Ok(release) => Message::UpdateChecked(release),
+            Err(error) => Message::UpdateCheckFailed(error),
+        },
     )
 }
 
@@ -1266,6 +1657,20 @@ fn open_store() -> Result<alidade_store::Store, String> {
     alidade_store::Store::open(&path).map_err(|err| err.to_string())
 }
 
+fn load_latest_round(path: &std::path::Path) -> Result<Option<LatestRound>, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+    }
+    let store = alidade_store::Store::open(path).map_err(|error| error.to_string())?;
+    // The existing store API returns oldest first, with id as the tie breaker.
+    // Read beyond the chart window so an old last round still appears at boot.
+    let mut rows = store
+        .rounds_between(SystemTime::UNIX_EPOCH, SystemTime::now())
+        .map_err(|error| error.to_string())?;
+    Ok(rows.pop().map(|row| LatestRound::Stored(Box::new(row))))
+}
+
 /// Same location the CLI writes to (`cli/src/main.rs::default_db_path`):
 /// `%LOCALAPPDATA%\Alidade\alidade.db`, so a round the app measures shows up
 /// in `alidade export` and vice versa. Not exported by `alidade-store` (the
@@ -1308,6 +1713,24 @@ pub fn target_is_failing(target: &TargetLive) -> bool {
     }
 }
 
+fn shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Message> {
+    use iced::keyboard::{key::Named, Key, Modifiers};
+    match (key, modifiers) {
+        (Key::Named(Named::F1), mode) if mode.is_empty() => Some(Message::HelpRequested),
+        (Key::Named(Named::Escape), _) => Some(Message::EscapePressed),
+        (Key::Named(Named::Tab), mode) if mode.is_empty() || mode == Modifiers::SHIFT => {
+            Some(Message::MoveFocus(mode.shift()))
+        }
+        (Key::Character(key), mode) if mode == Modifiers::CTRL && key.as_str() == "," => {
+            Some(Message::OpenSettings)
+        }
+        (Key::Character(key), mode) if mode == Modifiers::CTRL && key.eq_ignore_ascii_case("z") => {
+            Some(Message::UndoShortcutRequested)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1327,6 +1750,10 @@ mod tests {
             settings_error: None,
             round_running: false,
             last_round: None,
+            last_round_error: None,
+            activity: ActivityLine::new(true),
+            activity_at: Instant::now(),
+            measurement_draw_in: None,
             scheduler,
             continuous_running: false,
             continuous_paused: false,
@@ -1339,6 +1766,8 @@ mod tests {
             clock_armed: false,
             ping_targets: Vec::new(),
             toast: None,
+            removed_target: None,
+            removal_generation: 0,
             load_error: None,
             ui_settings: UiSettings::default(),
             interval_text: "60".to_string(),
@@ -1354,6 +1783,13 @@ mod tests {
             notify_state: NotifyState::default(),
             system_theme: iced::theme::Mode::None,
             available_update: None,
+            help_open: false,
+            help_query: String::new(),
+            help_opener: None,
+            about_open: false,
+            update_checking: false,
+            last_update_result: None,
+            last_update_at: None,
         }
     }
 
@@ -1607,4 +2043,7 @@ mod tests {
             "turning it back off must not schedule the check"
         );
     }
+    include!("../tests/support/t21.rs");
+    include!("../tests/support/t22.rs");
+    include!("../tests/support/t23.rs");
 }

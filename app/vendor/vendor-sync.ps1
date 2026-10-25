@@ -39,22 +39,46 @@ machine) that has $SourceRoot checked out.
 # Explicit allowlist, not a recursive directory copy: adding a new file under
 # $SourceRoot does NOT get vendored automatically. That is deliberate — see
 # "Only vendor what Alidade actually needs" in README.md. Extend this list by
-# hand if Alidade starts needing something it does not need today.
+# hand if Alidade starts needing something it does not need today. The same
+# list (source/vendor pairs) is declared again in design/consumers.json's
+# "iced" block, read by design/scripts/test_vendor.py (plan 094 item I) --
+# keep both lists in sync by hand when a file is added or removed here.
 #
 # CargoToml = the one file that is not a byte-for-byte copy of its source;
-# see $CargoTomlMarker below for what and why.
+# see the $CargoTomlMarker* variables below for what and why. Its name,
+# $MarkerName, is what design/consumers.json's "marker_file" field and this
+# script's own log lines call it, so both sides name the same exception.
+$MarkerName = "cargo-toml-clippy-allow"
 $Files = @(
-    @{ Source = "crates\design-tokens\Cargo.toml";   Vendor = "crates\design-tokens\Cargo.toml";   CargoToml = $true }
-    @{ Source = "crates\design-tokens\build.rs";      Vendor = "crates\design-tokens\build.rs";      CargoToml = $false }
-    @{ Source = "crates\design-tokens\src\lib.rs";    Vendor = "crates\design-tokens\src\lib.rs";    CargoToml = $false }
-    @{ Source = "crates\design-tokens\src\color.rs";  Vendor = "crates\design-tokens\src\color.rs";  CargoToml = $false }
+    @{ Source = "crates\design-tokens\Cargo.toml"; Vendor = "crates\design-tokens\Cargo.toml"; CargoToml = $true }
+    @{ Source = "crates\design-tokens\build.rs"; Vendor = "crates\design-tokens\build.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\lib.rs"; Vendor = "crates\design-tokens\src\lib.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\color.rs"; Vendor = "crates\design-tokens\src\color.rs"; CargoToml = $false }
     @{ Source = "crates\design-tokens\src\schema.rs"; Vendor = "crates\design-tokens\src\schema.rs"; CargoToml = $false }
-    @{ Source = "tokens\base.json";                   Vendor = "tokens\base.json";                   CargoToml = $false }
-    @{ Source = "tokens\apps\alidade.json";            Vendor = "tokens\apps\alidade.json";            CargoToml = $false }
-    @{ Source = "assets\fonts\Inter-Regular.ttf";      Vendor = "fonts\Inter-Regular.ttf";             CargoToml = $false }
-    @{ Source = "assets\fonts\Inter-Medium.ttf";       Vendor = "fonts\Inter-Medium.ttf";              CargoToml = $false }
-    @{ Source = "assets\fonts\Inter-SemiBold.ttf";     Vendor = "fonts\Inter-SemiBold.ttf";            CargoToml = $false }
-    @{ Source = "assets\fonts\OFL.txt";                Vendor = "fonts\OFL.txt";                       CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\hue_gate.rs"; Vendor = "crates\design-tokens\src\hue_gate.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\css_assemble.rs"; Vendor = "crates\design-tokens\src\css_assemble.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\contrast.rs"; Vendor = "crates\design-tokens\src\contrast.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\fonts.rs"; Vendor = "crates\design-tokens\src\fonts.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\styles.rs"; Vendor = "crates\design-tokens\src\styles.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\motion.rs"; Vendor = "crates\design-tokens\src\motion.rs"; CargoToml = $false }
+    @{ Source = "crates\design-tokens\src\keys.rs"; Vendor = "crates\design-tokens\src\keys.rs"; CargoToml = $false }
+    @{ Source = "tokens\base.json"; Vendor = "tokens\base.json"; CargoToml = $false }
+    @{ Source = "tokens\apps\alidade.json"; Vendor = "tokens\apps\alidade.json"; CargoToml = $false }
+    @{ Source = "assets\fonts\AtkinsonHyperlegibleNext-Variable.ttf"; Vendor = "fonts\AtkinsonHyperlegibleNext-Variable.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\OFL-AtkinsonHyperlegibleNext.txt"; Vendor = "fonts\OFL-AtkinsonHyperlegibleNext.txt"; CargoToml = $false }
+    @{ Source = "assets\fonts\Inter-Regular.ttf"; Vendor = "fonts\Inter-Regular.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\Inter-Medium.ttf"; Vendor = "fonts\Inter-Medium.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\Inter-SemiBold.ttf"; Vendor = "fonts\Inter-SemiBold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\OFL.txt"; Vendor = "fonts\OFL.txt"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSans-Regular.ttf"; Vendor = "assets\fonts\fira-sans\FiraSans-Regular.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSans-Medium.ttf"; Vendor = "assets\fonts\fira-sans\FiraSans-Medium.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSans-SemiBold.ttf"; Vendor = "assets\fonts\fira-sans\FiraSans-SemiBold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSans-Bold.ttf"; Vendor = "assets\fonts\fira-sans\FiraSans-Bold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSansTabular-Regular.ttf"; Vendor = "assets\fonts\fira-sans\FiraSansTabular-Regular.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSansTabular-Medium.ttf"; Vendor = "assets\fonts\fira-sans\FiraSansTabular-Medium.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSansTabular-SemiBold.ttf"; Vendor = "assets\fonts\fira-sans\FiraSansTabular-SemiBold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\FiraSansTabular-Bold.ttf"; Vendor = "assets\fonts\fira-sans\FiraSansTabular-Bold.ttf"; CargoToml = $false }
+    @{ Source = "assets\fonts\fira-sans\OFL.txt"; Vendor = "assets\fonts\fira-sans\OFL.txt"; CargoToml = $false }
 )
 
 # Appended to the vendored design-tokens Cargo.toml only. This crate was
@@ -67,6 +91,10 @@ $Files = @(
 # allow for both instead.
 $CargoTomlMarkerLines = @(
     ""
+    "# Marker block name: cargo-toml-clippy-allow (design/consumers.json's"
+    "# ""marker_file"" field for this app names this exact file; test_vendor.py"
+    "# checks it with a prefix match instead of byte equality because of this"
+    "# block)."
     "# The lines below are this vendored copy's one addition on top of the source"
     "# crate (``A:\projects-vault\design\crates\design-tokens\Cargo.toml``, not part"
     "# of this repo — see ../../README.md). This crate was never linted by this"
@@ -100,6 +128,22 @@ function Get-ExpectedBytes {
     return $Utf8NoBom.GetBytes($sourceText + $CargoTomlMarker)
 }
 
+# -Check treats CRLF and LF as equal, the same rule design/scripts/test_vendor.py
+# uses: a fresh checkout with core.autocrlf=true holds CRLF copies and must
+# report 0 drifted. The copy step stays byte-exact (-Exact), so a refresh still
+# writes the source bytes.
+function Test-SameContent {
+    param([byte[]]$Current, [byte[]]$Expected, [bool]$Exact)
+    # A NUL byte marks a binary file (fonts): compare those byte for byte.
+    if (-not $Exact -and ($Expected -notcontains 0)) {
+        $currentText = $Utf8NoBom.GetString($Current) -replace "`r`n", "`n"
+        $expectedText = $Utf8NoBom.GetString($Expected) -replace "`r`n", "`n"
+        $Current = $Utf8NoBom.GetBytes($currentText)
+        $Expected = $Utf8NoBom.GetBytes($expectedText)
+    }
+    return ($Current.Length -eq $Expected.Length) -and (-not (Compare-Object $Current $Expected -SyncWindow 0))
+}
+
 $drift = @()
 $updated = @()
 $unchanged = @()
@@ -116,15 +160,21 @@ foreach ($f in $Files) {
     $expected = Get-ExpectedBytes -SourcePath $sourcePath -IsCargoToml $f.CargoToml
     $currentExists = Test-Path -LiteralPath $vendorPath
     $current = if ($currentExists) { [System.IO.File]::ReadAllBytes($vendorPath) } else { $null }
-    $matches = $currentExists -and ($current.Length -eq $expected.Length) -and (-not (Compare-Object $current $expected -SyncWindow 0))
+    $matches = $currentExists -and (Test-SameContent -Current $current -Expected $expected -Exact (-not $Check))
+
+    # The Cargo.toml entry carries the $MarkerName block on top of its
+    # source, so its own label in every report below says so -- a reviewer
+    # reading "DRIFT: ...Cargo.toml" or "updated: ...Cargo.toml" sees why
+    # that one file is never a plain byte-for-byte copy.
+    $label = if ($f.CargoToml) { "$($f.Vendor) (marker: $MarkerName)" } else { $f.Vendor }
 
     if ($matches) {
-        $unchanged += $f.Vendor
+        $unchanged += $label
         continue
     }
 
     if ($Check) {
-        $drift += $f.Vendor
+        $drift += $label
         continue
     }
 
@@ -133,7 +183,7 @@ foreach ($f in $Files) {
         New-Item -ItemType Directory -Force -Path $vendorDir | Out-Null
     }
     [System.IO.File]::WriteAllBytes($vendorPath, $expected)
-    $updated += $f.Vendor
+    $updated += $label
 }
 
 if ($Check) {

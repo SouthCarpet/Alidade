@@ -36,6 +36,51 @@ impl Rgba {
 /// sRGB matrices (Björn Ottosson's OKLab constants), followed by the
 /// standard sRGB transfer-function encode (IEC 61966-2-1).
 pub fn oklch_to_srgb(l: f64, c: f64, h_deg: f64) -> (f32, f32, f32) {
+    let (r_lin, g_lin, b_lin) = oklch_to_linear_srgb(l, c, h_deg);
+    (
+        clamp01(srgb_encode(r_lin)) as f32,
+        clamp01(srgb_encode(g_lin)) as f32,
+        clamp01(srgb_encode(b_lin)) as f32,
+    )
+}
+
+/// True when no linear-sRGB channel of the OKLCH colour leaves `0..=1`, so
+/// the per-channel clamp in [`oklch_to_srgb`] changes nothing.
+pub fn in_srgb_gamut(l: f64, c: f64, h_deg: f64) -> bool {
+    const EPS: f64 = 1e-9;
+    let (r, g, b) = oklch_to_linear_srgb(l, c, h_deg);
+    [r, g, b].iter().all(|v| (-EPS..=1.0 + EPS).contains(v))
+}
+
+/// The chroma to use for `(l, c, h)` so the colour is inside sRGB: `c` when
+/// it already is, else the largest chroma at the same L and H that is,
+/// floored to 4 decimals (the precision the CSS prints), so the `oklch()`
+/// string and the `Rgba` const are the same colour. Chroma reduction at
+/// fixed L and H, not channel clipping (CSS Color 4, "Gamut mapping").
+pub fn fit_chroma_to_srgb(l: f64, c: f64, h_deg: f64) -> f64 {
+    if in_srgb_gamut(l, c, h_deg) {
+        return c;
+    }
+    let (mut lo, mut hi) = (0.0, c);
+    for _ in 0..50 {
+        let mid = (lo + hi) / 2.0;
+        if in_srgb_gamut(l, mid, h_deg) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo * 10000.0).floor() / 10000.0
+}
+
+/// The chroma of one second-hue tone (spec R35, lane k12): `c_factor` times
+/// the primary chroma of the same role, capped at `c_max`, then fitted into
+/// sRGB at fixed L and H. build.rs derives every `--color-accent2-*` with it.
+pub fn accent2_chroma(l: f64, primary_c: f64, c_factor: f64, c_max: f64, h_deg: f64) -> f64 {
+    fit_chroma_to_srgb(l, c_max.min(c_factor * primary_c), h_deg)
+}
+
+fn oklch_to_linear_srgb(l: f64, c: f64, h_deg: f64) -> (f64, f64, f64) {
     let h = h_deg.to_radians();
     let a = c * h.cos();
     let b = c * h.sin();
@@ -55,11 +100,7 @@ pub fn oklch_to_srgb(l: f64, c: f64, h_deg: f64) -> (f32, f32, f32) {
     let g_lin = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
     let b_lin = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
 
-    (
-        clamp01(srgb_encode(r_lin)) as f32,
-        clamp01(srgb_encode(g_lin)) as f32,
-        clamp01(srgb_encode(b_lin)) as f32,
-    )
+    (r_lin, g_lin, b_lin)
 }
 
 fn srgb_encode(c: f64) -> f64 {

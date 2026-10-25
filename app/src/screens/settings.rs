@@ -79,9 +79,8 @@ pub enum TargetField {
     Port(String),
 }
 
-/// One theme choice. `System` is the default; resolving it against the real
-/// OS theme, and actually repainting every screen, is out of scope here (see
-/// the module doc comment) — this only records the choice.
+/// One theme choice. System is the default; App::palette resolves the OS
+/// theme for every screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeMode {
     #[default]
@@ -90,7 +89,7 @@ pub enum ThemeMode {
     Dark,
 }
 
-pub const THEME_MODES: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
+pub const THEME_MODES: [ThemeMode; 3] = [ThemeMode::Light, ThemeMode::Dark, ThemeMode::System];
 
 impl fmt::Display for ThemeMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -116,10 +115,8 @@ pub struct Threshold {
 pub struct UiSettings {
     pub theme: ThemeMode,
     pub autostart: bool,
-    /// Opt-in, default off (plan 064): one unauthenticated GitHub check on
-    /// boot when true. An old `ui-settings.toml` with no `check_updates`
-    /// key falls through `parse`'s default-then-overwrite loop, so it loads
-    /// as `false` the same way a real `#[serde(default)]` would.
+    /// Opt-in, default off. Every update trigger uses this saved consent.
+    /// Older files without this key still load as false.
     pub check_updates: bool,
     pub notify_master: bool,
     pub notify_ping_ms: Threshold,
@@ -342,7 +339,7 @@ pub(crate) fn build_probe(kind: TargetKind, host: String, port_text: &str) -> Pr
 
 /// Validate the pending "add a target" form into a real [`TargetSpec`]. A
 /// user-added target is not community-sourced preset data, so it is not
-/// marked `unverified` — that badge is specifically for the shipped
+/// marked `unverified`, as that state is specifically for the shipped
 /// game-server presets (see `raw_speedtest_targets_2026-08.md`).
 pub(crate) fn validate_new_target(form: &NewTargetForm) -> Result<TargetSpec, String> {
     let name = form.name.trim();
@@ -462,18 +459,32 @@ pub fn body_scrollable_id() -> iced::widget::Id {
 // hardcoded `Palette::light()`.
 pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
     let body = column![
+        super::page_head(
+            palette,
+            "Settings",
+            format!(
+                "Measurement interval: {} min. Targets enabled: {}.",
+                app.settings.throughput_every.as_secs() / 60,
+                app.settings
+                    .targets
+                    .iter()
+                    .filter(|target| target.enabled)
+                    .count(),
+            )
+        ),
         section_title(palette, "Measurement"),
         interval_row(palette, app),
         metrics_row(palette, app),
-        theme_row(palette, app),
         autostart_row(palette, app),
-        check_updates_row(palette, app),
         budget_section(palette, app),
         section_title(palette, "Targets"),
         targets_table(palette, app),
         add_target_row(palette, app),
         section_title(palette, "Notifications"),
         notifications_section(palette, app),
+        section_title(palette, "Appearance"),
+        theme_row(palette, app),
+        about_section(palette, app),
     ]
     .spacing(SPACE.s6)
     .width(Fill);
@@ -485,6 +496,9 @@ pub fn view(app: &App, palette: Palette) -> Element<'_, Message> {
             .id(body_scrollable_id())
             .width(Fill)
             .height(Fill)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().spacing(SPACE.s2),
+            ))
             .into(),
     )
 }
@@ -560,18 +574,75 @@ fn metrics_row(palette: Palette, app: &App) -> Element<'_, Message> {
 }
 
 fn theme_row(palette: Palette, app: &App) -> Element<'_, Message> {
-    column![
-        field_label(palette, "Theme"),
-        pick_list(THEME_MODES, Some(app.ui_settings.theme), |mode| {
-            Message::SettingChanged(SettingField::Theme(mode))
-        })
-        .text_size(TYPE.sm)
+    let segments = row(THEME_MODES.into_iter().map(|mode| {
+        button(
+            text(mode.to_string())
+                .size(TYPE.sm)
+                .font(if mode == app.ui_settings.theme {
+                    font_medium()
+                } else {
+                    font_regular()
+                }),
+        )
         .padding([SPACE.s2, SPACE.s3])
-        .width(Length::Fixed(160.0))
-        .style(pick_list_style(palette)),
-    ]
-    .spacing(SPACE.s1)
-    .into()
+        .style(palette.segmented(mode == app.ui_settings.theme))
+        .on_press(Message::SettingChanged(SettingField::Theme(mode)))
+        .into()
+    }));
+    column![field_label(palette, "Theme"), segments]
+        .spacing(SPACE.s1)
+        .into()
+}
+
+pub(crate) fn about_label(open: bool) -> &'static str {
+    if open {
+        "Hide About"
+    } else {
+        "Show About"
+    }
+}
+
+fn about_section(palette: Palette, app: &App) -> Element<'_, Message> {
+    let label = about_label(app.about_open);
+    let heading = button(text(label).size(TYPE.md).font(font_medium()))
+        .style(palette.btn_ghost())
+        .on_press(Message::AboutToggled);
+    let mut body = column![heading].spacing(SPACE.s3);
+    if app.about_open {
+        body = body.push(
+            row![
+                crate::ui::app_mark(palette),
+                text(format!("Alidade {}", env!("CARGO_PKG_VERSION")))
+                    .size(TYPE.md)
+                    .font(font_medium())
+                    .color(palette.text())
+            ]
+            .spacing(SPACE.s2)
+            .align_y(Center),
+        );
+        body = body.push(
+            text(app.update_status())
+                .size(TYPE.sm)
+                .color(palette.text()),
+        );
+        if let Some(at) = app.last_update_at {
+            body = body.push(note(
+                palette,
+                format!("Last check: {} UTC (this session)", super::format_time(at)),
+            ));
+        }
+        body = body.push(check_updates_row(palette, app));
+        let check = button(text("Check now").size(TYPE.sm))
+            .padding([SPACE.s2, SPACE.s3])
+            .style(palette.btn_secondary());
+        body = body.push(
+            check.on_press_maybe(
+                (app.ui_settings.check_updates && !app.update_checking)
+                    .then_some(Message::CheckUpdatesNow),
+            ),
+        );
+    }
+    body.into()
 }
 
 fn autostart_row(palette: Palette, app: &App) -> Element<'_, Message> {
@@ -588,19 +659,10 @@ fn autostart_row(palette: Palette, app: &App) -> Element<'_, Message> {
 /// confirmation dialog.
 fn check_updates_row(palette: Palette, app: &App) -> Element<'_, Message> {
     column![
-        styled_checkbox(
-            palette,
-            "Kontrolovať nové verzie pri štarte",
-            app.ui_settings.check_updates,
-            |checked| Message::SettingChanged(SettingField::CheckUpdates(checked)),
-        ),
-        note(
-            palette,
-            "Jedna požiadavka na GitHub. Nič sa nesťahuje.".to_string(),
-        ),
-    ]
-    .spacing(SPACE.s1)
-    .into()
+        styled_checkbox(palette, "Check for updates", app.ui_settings.check_updates,
+            |checked| Message::SettingChanged(SettingField::CheckUpdates(checked))),
+        note(palette, "When enabled: one GitHub request at start, when About opens, or on Check now. No download.".to_string()),
+    ].spacing(SPACE.s1).into()
 }
 
 fn budget_section(palette: Palette, app: &App) -> Element<'_, Message> {
@@ -661,7 +723,7 @@ fn targets_table(palette: Palette, app: &App) -> Element<'_, Message> {
     for (index, target) in app.settings.targets.iter().enumerate() {
         rows.push(target_row(palette, app, index, target));
     }
-    palette.well_frame(true, column(rows).spacing(SPACE.s3).width(Fill))
+    palette.well_frame(column(rows).spacing(SPACE.s3).width(Fill))
 }
 
 fn header_cell<'a>(palette: Palette, label: &'static str, portion: u16) -> Element<'a, Message> {
@@ -696,13 +758,13 @@ fn target_row<'a>(
         .style(palette.text_input())
         .on_input(move |text| Message::TargetFieldChanged(index, TargetField::Name(text)));
 
-    // The badge sits inside the Name column rather than as its own grid
+    // The state text sits inside the Name column rather than as its own grid
     // cell, so an unverified row still has the same six columns as every
     // other row (a seventh, inserted cell would misalign the header).
     let name_cell: Element<'a, Message> = if target.verified {
         name_input.into()
     } else {
-        row![name_input, unverified_badge(palette)]
+        row![name_input, unverified_text(palette)]
             .spacing(SPACE.s1)
             .align_y(Center)
             .into()
@@ -768,28 +830,19 @@ fn target_row<'a>(
 /// A game-server preset that is community-sourced data, not measured by
 /// this project (`rule_design_language.md`-adjacent honesty rule, same
 /// spirit as `home.rs`'s "never a fake number").
-fn unverified_badge<'a>(palette: Palette) -> Element<'a, Message> {
-    let background: Color = palette.theme.warning_soft.into();
-    let foreground: Color = palette.theme.warning.into();
-    let badge = container(
-        text("unverified")
-            .size(TYPE.xs)
-            .font(font_medium())
-            .color(foreground),
-    )
-    .padding([SPACE.s1, SPACE.s2])
-    .style(move |_| {
-        container::Style::default()
-            .background(background)
-            .border(Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: iced::border::radius(RADIUS.pill),
-            })
-    });
+pub fn unverified_status(palette: Palette) -> (&'static str, design_tokens::Rgba) {
+    ("unverified", palette.theme.text)
+}
+
+fn unverified_text<'a>(palette: Palette) -> Element<'a, Message> {
+    let (label, foreground) = unverified_status(palette);
+    let state = text(label)
+        .size(TYPE.xs)
+        .font(font_regular())
+        .color(Color::from(foreground));
 
     tooltip(
-        badge,
+        state,
         container(
             text("Community-sourced game-server target, not measured by this project. See vault/knowledge/raw/raw_speedtest_targets_2026-08.md.")
                 .size(TYPE.xs)

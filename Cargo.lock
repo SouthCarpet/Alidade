@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "alidade-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alidade-engine",
  "alidade-store",
@@ -58,6 +58,7 @@ dependencies = [
  "open",
  "reqwest",
  "serde",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tray-icon",
@@ -65,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "alidade-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alidade-engine",
  "alidade-store",
@@ -77,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "alidade-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -92,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "alidade-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alidade-engine",
  "chrono",
@@ -990,9 +991,10 @@ checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
 name = "design-tokens"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "iced_core",
+ "iced_widget",
  "serde",
  "serde_json",
 ]

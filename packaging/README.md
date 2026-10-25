@@ -32,7 +32,7 @@ The installer lands at `target\installer\alidade-setup-<version>.exe`.
 ## Test a silent install
 
 ```powershell
-.\target\installer\alidade-setup-0.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES
+.\target\installer\alidade-setup-0.2.0.exe /VERYSILENT /SUPPRESSMSGBOXES
 ```
 
 `/VERYSILENT` skips all wizard pages. `/SUPPRESSMSGBOXES` skips information

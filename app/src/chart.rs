@@ -1,4 +1,4 @@
-//! The Continuous screen's honest, dual-axis measurement chart.
+//! The Continuous screen's measurement chart, with one plot per unit.
 //!
 //! `None` is deliberately carried from storage to the path builder. A
 //! missing measurement starts a new sub-path instead of becoming a zero at
@@ -7,11 +7,11 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alidade_store::RoundRow;
-use design_tokens::scale::{RADIUS, SHADOW_RAISE_DARK, SHADOW_RAISE_LIGHT, SPACE, TYPE};
+use design_tokens::scale::{RADIUS, SPACE, TYPE};
 use iced::alignment;
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Frame, Geometry, LineDash, Path, Stroke, Text};
-use iced::{Color, Font, Point as CanvasPoint, Rectangle, Renderer, Size};
+use iced::{Color, Point as CanvasPoint, Rectangle, Renderer, Size};
 
 use crate::theme::Palette;
 
@@ -23,6 +23,62 @@ const DASH_PATTERNS: [&[f32]; 6] = [
     &[16.0, 6.0],
     &[8.0, 4.0, 1.5, 4.0, 1.5, 4.0],
 ];
+
+#[cfg(test)]
+#[path = "../tests/support/canvas_pixels.rs"]
+pub(crate) mod canvas_pixels;
+
+#[derive(Clone, Copy)]
+pub struct SeriesSpec {
+    pub label: &'static str,
+    pub panel: usize,
+    pub stroke: Stroke<'static>,
+    metric: fn(&Point) -> Option<f64>,
+}
+
+/// One source for plot strokes and the labelled line samples below each plot.
+pub fn series_specs(palette: Palette) -> [SeriesSpec; 6] {
+    let labels = [
+        "Download",
+        "Upload",
+        "Idle",
+        "Load",
+        "Jitter",
+        "Packet loss",
+    ];
+    let panels = [0, 0, 1, 1, 1, 2];
+    let metrics: [fn(&Point) -> Option<f64>; 6] = [
+        |p| p.download_mbit,
+        |p| p.upload_mbit,
+        |p| p.ping_idle_ms,
+        |p| p.ping_load_ms,
+        |p| p.jitter_ms,
+        |p| p.loss_pct,
+    ];
+    std::array::from_fn(|index| SeriesSpec {
+        label: labels[index],
+        panel: panels[index],
+        metric: metrics[index],
+        stroke: Stroke {
+            line_dash: LineDash {
+                segments: DASH_PATTERNS[index],
+                offset: 0,
+            },
+            ..Stroke::default()
+                .with_width(2.0)
+                .with_color(palette.theme.chart[index].into())
+        },
+    })
+}
+
+/// The labelled samples consumed by a panel's key renderer.
+pub fn key_entries(palette: Palette, panel: usize) -> Vec<(&'static str, Stroke<'static>)> {
+    series_specs(palette)
+        .into_iter()
+        .filter(|series| series.panel == panel)
+        .map(|series| (series.label, series.stroke))
+        .collect()
+}
 
 /// The time-range chips used by the Continuous screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -151,11 +207,53 @@ impl LineChart {
             palette,
         }
     }
+
+    fn plots(&self, size: Size) -> [Plot; 3] {
+        let domains = chart_domains(&self.points);
+        std::array::from_fn(|index| {
+            let bounds = panel_bounds(size)[index];
+            let mut plot = plot_area(bounds.size(), domains[index], (0.0, 0.0));
+            plot.x += bounds.x;
+            plot
+        })
+    }
+}
+
+/// Throughput, latency and loss domains are computed from their own units only.
+pub fn chart_domains(points: &[Point]) -> [(f64, f64); 3] {
+    let speeds: Vec<_> = points
+        .iter()
+        .flat_map(|p| [p.download_mbit, p.upload_mbit])
+        .flatten()
+        .collect();
+    let latency: Vec<_> = points
+        .iter()
+        .flat_map(|p| [p.ping_idle_ms, p.ping_load_ms, p.jitter_ms])
+        .flatten()
+        .collect();
+    let loss: Vec<_> = points.iter().filter_map(|p| p.loss_pct).collect();
+    [
+        y_scale(&speeds, false),
+        y_scale(&latency, true),
+        y_scale(&loss, true),
+    ]
+}
+
+/// Three disjoint plots keep the existing chart height and table space.
+pub fn panel_bounds(size: Size) -> [Rectangle; 3] {
+    let width = ((size.width - SPACE.s6 * 2.0) / 3.0).max(0.0);
+    std::array::from_fn(|index| {
+        Rectangle::new(
+            CanvasPoint::new(index as f32 * (width + SPACE.s6), 0.0),
+            Size::new(width, size.height),
+        )
+    })
 }
 
 #[derive(Debug, Default)]
 pub struct ChartState {
     hovered: Option<usize>,
+    panel: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -192,18 +290,23 @@ impl<Message> canvas::Program<Message> for LineChart {
             return None;
         }
 
-        let plot = plot_area(bounds.size());
-        let hovered = cursor.position_in(bounds).and_then(|position| {
-            if plot.rectangle().contains(position) {
-                nearest_point(&self.points, plot, position.x)
-            } else {
-                None
-            }
+        let hit = cursor.position_in(bounds).and_then(|position| {
+            self.plots(bounds.size())
+                .into_iter()
+                .enumerate()
+                .find_map(|(index, plot)| {
+                    plot.rectangle()
+                        .contains(position)
+                        .then_some((index, plot, position.x))
+                })
         });
-        if state.hovered == hovered {
+        let hovered = hit.and_then(|(_, plot, x)| nearest_point(&self.points, plot, x));
+        let panel = hit.map_or(state.panel, |(index, _, _)| index);
+        if state.hovered == hovered && state.panel == panel {
             None
         } else {
             state.hovered = hovered;
+            state.panel = panel;
             Some(Action::request_redraw())
         }
     }
@@ -217,118 +320,23 @@ impl<Message> canvas::Program<Message> for LineChart {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let plot = plot_area(frame.size());
-        let theme = *self.palette.theme;
-        let throughput = self
-            .points
-            .iter()
-            .flat_map(|point| [point.download_mbit, point.upload_mbit])
-            .flatten()
-            .collect::<Vec<_>>();
-        let latency = self
-            .points
-            .iter()
-            .flat_map(|point| {
-                [
-                    point.ping_idle_ms,
-                    point.ping_load_ms,
-                    point.jitter_ms,
-                    point.loss_pct,
-                ]
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-        let throughput_scale = y_scale(&throughput, false);
-        let latency_scale = y_scale(&latency, true);
-
-        // The chart itself is a recessed well by colour alone: no shadow is
-        // attached to this rectangle.
-        frame.fill_rectangle(
-            CanvasPoint::new(plot.x, plot.y),
-            Size::new(plot.width, plot.height),
-            self.palette.well(),
-        );
-        frame.stroke_rectangle(
-            CanvasPoint::new(plot.x, plot.y),
-            Size::new(plot.width, plot.height),
-            Stroke::default()
-                .with_width(1.0)
-                .with_color(theme.border.into()),
-        );
-
-        draw_grid(&mut frame, plot, theme.chart_grid.into());
-        draw_axes(
-            &mut frame,
-            plot,
-            throughput_scale,
-            latency_scale,
-            self.palette.muted(),
-        );
-
-        // Series one is a min/max envelope around each available download
-        // measurement. Its alpha is the token-defined chart band alpha.
-        draw_download_band(
-            &mut frame,
-            &self.points,
-            plot,
-            throughput_scale,
-            theme.chart[0].into(),
-            theme.chart_band_alpha,
-        );
-
-        if !throughput.is_empty() {
-            let average = throughput.iter().sum::<f64>() / throughput.len() as f64;
-            let y = y_for(average, throughput_scale, plot);
-            frame.stroke(
-                &Path::line(
-                    CanvasPoint::new(plot.x, y),
-                    CanvasPoint::new(plot.x + plot.width, y),
-                ),
-                Stroke {
-                    line_dash: LineDash {
-                        segments: &[4.0, 3.0],
-                        offset: 0,
-                    },
-                    ..Stroke::default()
-                        .with_width(1.0)
-                        .with_color(self.palette.muted())
-                },
-            );
+        let plots = self.plots(frame.size());
+        let domains = chart_domains(&self.points);
+        for index in 0..3 {
+            self.draw_panel(&mut frame, plots[index], domains[index], index);
         }
-
-        let series: [fn(&Point) -> Option<f64>; 6] = [
-            |point| point.download_mbit,
-            |point| point.upload_mbit,
-            |point| point.ping_idle_ms,
-            |point| point.ping_load_ms,
-            |point| point.jitter_ms,
-            |point| point.loss_pct,
-        ];
-        for (index, metric) in series.into_iter().enumerate() {
-            let scale = if index < 2 {
-                throughput_scale
-            } else {
-                latency_scale
-            };
-            draw_series(
-                &mut frame,
-                &self.points,
-                plot,
-                scale,
-                metric,
-                theme.chart[index].into(),
-                DASH_PATTERNS[index],
-            );
-        }
-
         if let Some(index) = state.hovered.filter(|index| *index < self.points.len()) {
+            let point = &self.points[index];
             draw_hover(
                 &mut frame,
-                &self.points[index],
+                point,
                 index,
                 &self.points,
-                plot,
-                throughput_scale,
+                plots[state.panel],
+                (
+                    domains[state.panel],
+                    [point.download_mbit, point.ping_idle_ms, point.loss_pct][state.panel],
+                ),
                 self.palette,
             );
         }
@@ -342,10 +350,11 @@ impl<Message> canvas::Program<Message> for LineChart {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if cursor
-            .position_in(bounds)
-            .is_some_and(|position| plot_area(bounds.size()).rectangle().contains(position))
-        {
+        if cursor.position_in(bounds).is_some_and(|position| {
+            self.plots(bounds.size())
+                .iter()
+                .any(|plot| plot.rectangle().contains(position))
+        }) {
             mouse::Interaction::Crosshair
         } else {
             mouse::Interaction::default()
@@ -353,11 +362,113 @@ impl<Message> canvas::Program<Message> for LineChart {
     }
 }
 
-fn plot_area(size: Size) -> Plot {
-    let x = SPACE.s6;
+impl LineChart {
+    fn draw_panel(
+        &self,
+        frame: &mut Frame<Renderer>,
+        plot: Plot,
+        domain: (f64, f64),
+        panel: usize,
+    ) {
+        frame.fill_rectangle(
+            CanvasPoint::new(plot.x, plot.y),
+            Size::new(plot.width, plot.height),
+            self.palette.well(),
+        );
+        frame.stroke_rectangle(
+            CanvasPoint::new(plot.x, plot.y),
+            Size::new(plot.width, plot.height),
+            Stroke::default()
+                .with_width(1.0)
+                .with_color(self.palette.border()),
+        );
+        draw_grid(frame, plot, self.palette.theme.chart_grid.into());
+        draw_axes(
+            frame,
+            plot,
+            domain,
+            ["Throughput (Mbit/s)", "Latency (ms)", "Loss (%)"][panel],
+            self.palette.muted(),
+        );
+        for series in series_specs(self.palette)
+            .into_iter()
+            .filter(|s| s.panel == panel)
+        {
+            draw_series(
+                frame,
+                &self.points,
+                plot,
+                domain,
+                series.metric,
+                series.stroke,
+            );
+        }
+        let mut key_x = plot.x;
+        let mut key_y = plot.y + plot.height + SPACE.s4;
+        for (label, stroke) in key_entries(self.palette, panel) {
+            let entry_width =
+                SPACE.s6 * 2.0 + SPACE.s1 + label.len() as f32 * TYPE.xs * LABEL_EM_PER_CHAR;
+            if key_x > plot.x && key_x + entry_width > plot.x + plot.width {
+                key_x = plot.x;
+                key_y += SPACE.s4 + SPACE.s1;
+            }
+            frame.stroke(
+                &Path::line(
+                    CanvasPoint::new(key_x, key_y),
+                    CanvasPoint::new(key_x + SPACE.s6 * 2.0, key_y),
+                ),
+                stroke,
+            );
+            draw_text(
+                frame,
+                label,
+                CanvasPoint::new(key_x + SPACE.s6 * 2.0 + SPACE.s1, key_y),
+                self.palette.muted(),
+                TYPE.xs,
+                alignment::Horizontal::Left,
+            );
+            key_x += entry_width + SPACE.s3;
+        }
+    }
+}
+
+/// Text width is estimated at 0.62 em per digit. The numeric face is
+/// tabular, so one estimate per character holds for every digit.
+const LABEL_EM_PER_CHAR: f32 = 0.62;
+
+fn axis_label(value: f64, scale: (f64, f64)) -> String {
+    if scale.1 - scale.0 < 4.0 {
+        format!("{value:.2}")
+    } else {
+        format!("{value:.0}")
+    }
+}
+
+/// The widest of the five tick labels of `scale`, in characters.
+fn widest_label_chars(scale: (f64, f64)) -> usize {
+    (0..=4)
+        .map(|step| {
+            axis_label(
+                scale.0 + (scale.1 - scale.0) * (f64::from(step) / 4.0),
+                scale,
+            )
+        })
+        .map(|label| label.chars().count())
+        .max()
+        .unwrap_or(1)
+}
+
+/// Side margin that holds the widest label of `scale` beside the plot well.
+fn label_margin(scale: (f64, f64)) -> f32 {
+    let text = widest_label_chars(scale) as f32 * TYPE.xs * LABEL_EM_PER_CHAR;
+    (text + SPACE.s2 + SPACE.s1).max(SPACE.s6)
+}
+
+fn plot_area(size: Size, left: (f64, f64), right: (f64, f64)) -> Plot {
+    let x = label_margin(left);
     let y = SPACE.s4;
-    let width = (size.width - (SPACE.s6 * 2.0)).max(0.0);
-    let height = (size.height - (SPACE.s4 + SPACE.s6)).max(0.0);
+    let width = (size.width - x - label_margin(right)).max(0.0);
+    let height = (size.height - (SPACE.s4 + SPACE.s6 * 2.0 + SPACE.s2)).max(0.0);
     Plot {
         x,
         y,
@@ -382,90 +493,31 @@ fn draw_grid(frame: &mut Frame<Renderer>, plot: Plot, color: Color) {
 fn draw_axes(
     frame: &mut Frame<Renderer>,
     plot: Plot,
-    left: (f64, f64),
-    right: (f64, f64),
+    domain: (f64, f64),
+    unit: &str,
     color: Color,
 ) {
     for step in 0..=4 {
         let fraction = step as f64 / 4.0;
         let y = plot.y + plot.height * (1.0 - fraction) as f32;
-        let left_value = left.0 + ((left.1 - left.0) * fraction);
-        let right_value = right.0 + ((right.1 - right.0) * fraction);
+        let left_value = domain.0 + ((domain.1 - domain.0) * fraction);
         draw_text(
             frame,
-            format!("{left_value:.0}"),
+            axis_label(left_value, domain),
             CanvasPoint::new(plot.x - SPACE.s2, y),
             color,
             TYPE.xs,
             alignment::Horizontal::Right,
         );
-        draw_text(
-            frame,
-            format!("{right_value:.0}"),
-            CanvasPoint::new(plot.x + plot.width + SPACE.s2, y),
-            color,
-            TYPE.xs,
-            alignment::Horizontal::Left,
-        );
     }
     draw_text(
         frame,
-        "Mbit/s",
+        unit,
         CanvasPoint::new(plot.x, plot.y - SPACE.s2),
         color,
         TYPE.xs,
         alignment::Horizontal::Left,
     );
-    draw_text(
-        frame,
-        "ms",
-        CanvasPoint::new(plot.x + plot.width, plot.y - SPACE.s2),
-        color,
-        TYPE.xs,
-        alignment::Horizontal::Right,
-    );
-}
-
-fn draw_download_band(
-    frame: &mut Frame<Renderer>,
-    points: &[Point],
-    plot: Plot,
-    scale: (f64, f64),
-    color: Color,
-    alpha: f32,
-) {
-    let mut run: Vec<(f32, f32, f32)> = Vec::new();
-    for (index, point) in points.iter().enumerate() {
-        if let Some(value) = point.download_mbit {
-            let x = x_for(points, index, plot);
-            run.push((
-                x,
-                y_for(value * 1.12, scale, plot),
-                y_for(value * 0.88, scale, plot),
-            ));
-        } else {
-            fill_band_run(frame, &run, color, alpha);
-            run.clear();
-        }
-    }
-    fill_band_run(frame, &run, color, alpha);
-}
-
-fn fill_band_run(frame: &mut Frame<Renderer>, run: &[(f32, f32, f32)], color: Color, alpha: f32) {
-    if run.len() < 2 {
-        return;
-    }
-    let path = Path::new(|builder| {
-        builder.move_to(CanvasPoint::new(run[0].0, run[0].1));
-        for (x, upper, _) in run.iter().skip(1) {
-            builder.line_to(CanvasPoint::new(*x, *upper));
-        }
-        for (x, _, lower) in run.iter().rev() {
-            builder.line_to(CanvasPoint::new(*x, *lower));
-        }
-        builder.close();
-    });
-    frame.fill(&path, Color { a: alpha, ..color });
 }
 
 fn draw_series(
@@ -474,8 +526,7 @@ fn draw_series(
     plot: Plot,
     scale: (f64, f64),
     metric: fn(&Point) -> Option<f64>,
-    color: Color,
-    dash: &'static [f32],
+    stroke: Stroke<'static>,
 ) {
     let path = Path::new(|builder| {
         let mut connected = false;
@@ -493,16 +544,7 @@ fn draw_series(
             }
         }
     });
-    frame.stroke(
-        &path,
-        Stroke {
-            line_dash: LineDash {
-                segments: dash,
-                offset: 0,
-            },
-            ..Stroke::default().with_width(2.0).with_color(color)
-        },
-    );
+    frame.stroke(&path, stroke);
 }
 
 fn draw_hover(
@@ -511,7 +553,7 @@ fn draw_hover(
     index: usize,
     points: &[Point],
     plot: Plot,
-    throughput_scale: (f64, f64),
+    metric: ((f64, f64), Option<f64>),
     palette: Palette,
 ) {
     let x = x_for(points, index, plot);
@@ -523,8 +565,8 @@ fn draw_hover(
         ),
         Stroke::default().with_width(1.0).with_color(crosshair),
     );
-    if let Some(download) = point.download_mbit {
-        let y = y_for(download, throughput_scale, plot);
+    if let Some(value) = metric.1 {
+        let y = y_for(value, metric.0, plot);
         frame.stroke(
             &Path::line(
                 CanvasPoint::new(plot.x, y),
@@ -543,22 +585,11 @@ fn draw_hover(
     };
     let card_y = (plot.y + SPACE.s3).min(plot.y + plot.height - card_height);
     let radius = iced::border::radius(RADIUS.md);
-    let shadow = if palette.dark {
-        SHADOW_RAISE_DARK
-    } else {
-        SHADOW_RAISE_LIGHT
-    };
     let card = Path::rounded_rectangle(
         CanvasPoint::new(card_x, card_y),
         Size::new(card_width, card_height),
         radius,
     );
-    let shadow_path = Path::rounded_rectangle(
-        CanvasPoint::new(card_x + shadow.x, card_y + shadow.y),
-        Size::new(card_width, card_height),
-        radius,
-    );
-    frame.fill(&shadow_path, iced::Color::from(shadow.color));
     frame.fill(&card, palette.raised());
     frame.stroke(
         &card,
@@ -609,7 +640,7 @@ fn draw_text(
         position,
         color,
         size: size.into(),
-        font: Font::MONOSPACE,
+        font: crate::ui::font_numeric(),
         align_x: align_x.into(),
         align_y: alignment::Vertical::Center,
         ..Text::default()
@@ -681,4 +712,121 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     (year + i64::from(month <= 2), month as u32, day as u32)
+}
+
+#[cfg(test)]
+mod canvas_render_tests {
+    use super::*;
+    use canvas::Program;
+
+    #[tokio::test]
+    async fn continuous_draw_keeps_all_six_key_labels_and_sample_strokes() {
+        // R3-F1/M1: an empty, wide chart still draws all six labelled key samples.
+        // Oracle: the p3 series contract, independent of key_entries/series_specs.
+        let chart = LineChart::new(&[], TimeRange::Hour);
+        let size = Size::new(2400.0, 240.0);
+        let mut actual_renderer = canvas_pixels::renderer().await;
+        let geometry = <LineChart as Program<()>>::draw(
+            &chart,
+            &ChartState::default(),
+            &actual_renderer,
+            &iced::Theme::Light,
+            Rectangle::with_size(size),
+            mouse::Cursor::Unavailable,
+        );
+        let actual = canvas_pixels::render(&mut actual_renderer, geometry, Size::new(2400, 240));
+        let mut expected_renderer = canvas_pixels::renderer().await;
+        let mut frame = Frame::new(&expected_renderer, size);
+        let panels: [&[(&str, &[f32], usize)]; 3] = [
+            &[("Download", &[], 0), ("Upload", &[8.0, 5.0], 1)],
+            &[
+                ("Idle", &[1.5, 4.0], 2),
+                ("Load", &[8.0, 4.0, 1.5, 4.0], 3),
+                ("Jitter", &[16.0, 6.0], 4),
+            ],
+            &[("Packet loss", &[8.0, 4.0, 1.5, 4.0, 1.5, 4.0], 5)],
+        ];
+        for (plot, entries) in chart.plots(size).into_iter().zip(panels) {
+            let mut x = plot.x;
+            let y = plot.y + plot.height + SPACE.s4;
+            for &(label, segments, color) in entries {
+                frame.stroke(
+                    &Path::line(CanvasPoint::new(x, y), CanvasPoint::new(x + 48.0, y)),
+                    Stroke {
+                        line_dash: LineDash {
+                            segments,
+                            offset: 0,
+                        },
+                        ..Stroke::default()
+                            .with_width(2.0)
+                            .with_color(Palette::light().theme.chart[color].into())
+                    },
+                );
+                frame.fill_text(Text {
+                    content: label.into(),
+                    position: CanvasPoint::new(x + 52.0, y),
+                    color: Palette::light().muted(),
+                    size: TYPE.xs.into(),
+                    font: crate::ui::font_numeric(),
+                    align_y: alignment::Vertical::Center,
+                    ..Text::default()
+                });
+                x += 52.0 + label.len() as f32 * TYPE.xs * 0.62 + SPACE.s3;
+            }
+        }
+        let expected = canvas_pixels::render(
+            &mut expected_renderer,
+            vec![frame.into_geometry()],
+            Size::new(2400, 240),
+        );
+        canvas_pixels::assert_region_eq(
+            &actual,
+            &expected,
+            2400,
+            [0, 196, 2400, 240],
+            "Continuous key",
+        );
+    }
+}
+
+#[cfg(test)]
+mod axis_margin_tests {
+    use super::*;
+
+    #[test]
+    fn the_loss_axis_keeps_fractional_percent_ticks_distinct() {
+        // R34(e): the empty-loss domain is 0..1%, so quarter-percent ticks must stay distinct.
+        assert_eq!(axis_label(0.25, (0.0, 1.0)), "0.25");
+        assert_eq!(axis_label(0.5, (0.0, 1.0)), "0.50");
+        assert_eq!(axis_label(0.75, (0.0, 1.0)), "0.75");
+    }
+
+    #[test]
+    fn the_left_margin_grows_with_the_widest_label() {
+        let three = label_margin((0.0, 109.0));
+        let four = label_margin((0.0, 1_090.0));
+        assert!(
+            four > three,
+            "a four-digit label needs more room than three"
+        );
+        assert!(three >= SPACE.s6, "the margin never drops below the base");
+    }
+
+    #[test]
+    fn the_widest_label_counts_a_minus_sign() {
+        assert_eq!(widest_label_chars((-5.0, 95.0)), 2);
+        assert_eq!(widest_label_chars((-15.0, 95.0)), 3);
+    }
+
+    #[test]
+    fn the_plot_keeps_room_for_a_four_digit_top_label() {
+        let size = Size::new(800.0, 400.0);
+        let plot = plot_area(size, (0.0, 1_090.0), (0.0, 120.0));
+        let label_width = 4.0 * TYPE.xs * LABEL_EM_PER_CHAR;
+        assert!(
+            plot.x >= label_width + SPACE.s2,
+            "left labels fit left of the well"
+        );
+        assert!(plot.width > 0.0 && plot.x + plot.width <= size.width);
+    }
 }
