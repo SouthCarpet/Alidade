@@ -54,6 +54,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Size the chart side margins from the widest axis label, so a label of three or four digits shows in full.
 
 - Set the Rust cognitive complexity limit to 12 (`clippy.toml`). Three store tests and the startup flag parser were split into helpers to meet it. No assertion or flag behaviour changed.
+- CI and release workflows use Node 24 actions: `actions/checkout` v7, `actions/cache` v6, `softprops/action-gh-release` v3.
 
 ### Fixed
 
