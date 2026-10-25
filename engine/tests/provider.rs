@@ -9,6 +9,10 @@ use wiremock::{
     Match, Mock, MockServer, Request, Respond, ResponseTemplate,
 };
 
+// Bulk loopback transfers must not compete inside the short phase budgets.
+// Acquire before fixture setup and before any measurement clock starts.
+static PROVIDER_TRAFFIC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn endpoints(server: &MockServer) -> EndpointConfig {
     EndpointConfig {
         download_url: format!("{}/__down", server.uri()),
@@ -78,6 +82,7 @@ impl Match for BytesAtLeast {
 
 #[tokio::test]
 async fn download_is_time_bounded_and_reports_measured_bytes() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     // The real `__down` contract (F4): serves exactly what is asked, refuses
     // the 403 ceiling. This request never gets near it, but the mock still
@@ -106,6 +111,7 @@ async fn download_is_time_bounded_and_reports_measured_bytes() {
 
 #[tokio::test]
 async fn upload_posts_a_body_and_measures_it() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/__up"))
@@ -126,6 +132,7 @@ async fn upload_posts_a_body_and_measures_it() {
 
 #[tokio::test]
 async fn a_server_error_is_an_error_not_a_zero_reading() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/__down"))
@@ -151,6 +158,7 @@ async fn a_server_error_is_an_error_not_a_zero_reading() {
 /// the `elapsed >= budget` assertion too — two independent tripwires.
 #[tokio::test]
 async fn download_stops_on_the_clock_not_the_byte_cap() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     let max_bytes: u64 = 64_000_000; // 64 MB — no budget this small can drain it
                                      // F4: `LikeCloudflareDown` serves exactly the requested `bytes` (up to
@@ -197,6 +205,7 @@ async fn download_stops_on_the_clock_not_the_byte_cap() {
 /// `deadline`, not on `remaining == 0`.
 #[tokio::test]
 async fn upload_stops_on_the_clock_not_the_byte_cap() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/__up"))
@@ -246,6 +255,7 @@ async fn upload_stops_on_the_clock_not_the_byte_cap() {
 /// individual request may reach the ceiling.
 #[tokio::test]
 async fn no_download_request_ever_reaches_the_403_ceiling() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/__down"))
@@ -294,6 +304,7 @@ async fn no_download_request_ever_reaches_the_403_ceiling() {
 /// report). Both are asserted; only the count fails under the revert.
 #[tokio::test]
 async fn download_is_not_capped_by_what_one_request_can_deliver() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/__down"))
@@ -343,6 +354,7 @@ async fn download_is_not_capped_by_what_one_request_can_deliver() {
 /// second broke would discard the better of the two answers.
 #[tokio::test]
 async fn a_chunk_failing_after_bytes_were_measured_keeps_the_measurement() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     let chunk: u64 = 256 * 1024;
     Mock::given(method("GET"))
@@ -374,6 +386,7 @@ async fn a_chunk_failing_after_bytes_were_measured_keeps_the_measurement() {
 /// never cap the phase.
 #[tokio::test]
 async fn upload_is_not_capped_by_its_chunk_size() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/__up"))
@@ -409,6 +422,7 @@ async fn upload_is_not_capped_by_its_chunk_size() {
 /// that is not allowed to exist.
 #[tokio::test]
 async fn a_download_with_no_ceiling_runs_the_whole_budget_and_is_not_capped() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/__down"))
@@ -440,6 +454,7 @@ async fn a_download_with_no_ceiling_runs_the_whole_budget_and_is_not_capped() {
 /// phase reports that the ceiling, not the clock, is what ended it.
 #[tokio::test]
 async fn a_download_stopped_by_its_ceiling_reports_itself_capped() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/__down"))
@@ -473,6 +488,7 @@ async fn received_get_count(server: &MockServer) -> usize {
 /// limit condition without issuing another request.
 #[tokio::test]
 async fn a_429_is_not_retried_before_backoff_elapses() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/__down"))
@@ -520,6 +536,7 @@ async fn a_429_is_not_retried_before_backoff_elapses() {
 /// the wait — not the built-in 15-minute schedule.
 #[tokio::test]
 async fn retry_after_delay_seconds_are_honoured() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/__down"))
@@ -580,6 +597,7 @@ async fn retry_after_delay_seconds_are_honoured() {
 /// armed so the next call does not hammer the limit.
 #[tokio::test]
 async fn a_429_after_chunks_were_measured_keeps_the_bytes() {
+    let _traffic = PROVIDER_TRAFFIC.lock().await;
     let server = MockServer::start().await;
     let chunk: u64 = 256 * 1024;
     Mock::given(method("GET"))

@@ -22,6 +22,8 @@ cargo run -p alidade-app                                 # iced desktop app
 ```
 CI (`.github/workflows/ci.yml`) runs the same three cargo steps on `windows-latest` for pushes to `main`, tags, and PRs.
 
+The 14 HTTP provider integration tests hold one asynchronous traffic guard per test, from fixture setup through the assertions. This keeps bulk loopback transfers from competing inside the short measurement budgets. Each test still has its own server and provider. The timing budgets and assertions are unchanged.
+
 ## Data and settings
 - Database: `%LOCALAPPDATA%\Alidade\alidade.db`
 - Settings: `%APPDATA%\Alidade\settings.toml` (plain, user-editable TOML; default throughput source is Cloudflare's public speed-test endpoints behind a provider trait)
