@@ -99,12 +99,8 @@ fn missing_loaded_ping_explains_that_no_throughput_phase_ran() {
 
 #[test]
 fn legacy_stored_speed_without_load_details_explains_the_missing_ping() {
-    let folder = std::path::Path::new("A:/tmp/120-p3-home/tests/legacy");
-    std::fs::create_dir_all(folder).unwrap();
-    let db = folder.join("legacy.db");
-    if db.exists() {
-        std::fs::remove_file(&db).unwrap();
-    }
+    let folder = tempfile::tempdir().unwrap();
+    let db = folder.path().join("legacy.db");
     let store = alidade_store::Store::open(&db).unwrap();
     let mut result = measured();
     result.ping_down = None;
@@ -122,12 +118,11 @@ fn legacy_stored_speed_without_load_details_explains_the_missing_ping() {
 
 #[test]
 fn an_unreadable_store_reports_a_home_error_instead_of_claiming_no_rounds() {
-    let folder = std::path::PathBuf::from("A:/tmp/120-p3-home/tests/unreadable");
-    std::fs::create_dir_all(&folder).unwrap();
-    let settings = folder.join("settings.toml");
+    let folder = tempfile::tempdir().unwrap();
+    let settings = folder.path().join("settings.toml");
     alidade_engine::Settings::default().save(&settings).unwrap();
     let flags = alidade_app::startup::StartupFlags {
-        db: Some(folder),
+        db: Some(folder.path().to_path_buf()),
         settings: Some(settings),
         ..alidade_app::startup::StartupFlags::default()
     };
