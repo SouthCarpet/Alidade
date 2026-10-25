@@ -2,6 +2,8 @@
 
 Alidade measures a fixed internet link over time and keeps the record. Each full round records download, upload, ping, and ping under load: whether latency gets worse while the link is busy. It stores the results in SQLite and can export CSV evidence for an ISP dispute. `ping-monitor` is a denser mode for watching a game-server or other target's latency.
 
+Version **0.2.0**. See [the release notes](CHANGELOG.md#020---2026-10-25) for the changes.
+
 ## Features
 
 - Home loads the latest stored round at start and runs a single test. An empty store shows the empty state; a read failure shows its reason.
@@ -13,7 +15,9 @@ Alidade measures a fixed internet link over time and keeps the record. Each full
 
 ## Quick start
 
-Download `alidade.exe` from [Releases](https://github.com/SouthCarpet/Alidade/releases), then run:
+For the desktop app, download `alidade-setup-0.2.0.exe` from [Releases](https://github.com/SouthCarpet/Alidade/releases). See [INSTALL.md](INSTALL.md) for portable files and install details.
+
+For the CLI, download `alidade.exe`, then run:
 
 ```powershell
 .\alidade.exe single
@@ -33,6 +37,12 @@ See [INSTALL.md](INSTALL.md), [CHANGELOG.md](CHANGELOG.md), and [KNOWN_ISSUES.md
 ## Desktop appearance
 
 The desktop app uses vendored Kaliber design tokens 0.10.0, with light and dark palettes. Raised panes use a tone step and a 1 px hairline. Text uses Fira Sans; metric numbers and chart labels use Fira Sans Tabular, with equal-width figures and a plain zero.
+
+These 0.2.0 captures use seeded local data, the light theme, and a 1280 x 800 client area. No measurement is started for a screenshot.
+
+![Home with the latest stored round](app/docs/screens/release-0.2.0-home-light.png)
+
+![Continuous with separate speed, latency, and loss plots](app/docs/screens/release-0.2.0-continuous-light.png)
 
 ## Desktop controls
 
@@ -54,7 +64,7 @@ Chart axes use two decimal places when their span is below four units, so fracti
 
 The header shows the Alidade mark and name. Settings is the last tab. The header theme switch chooses Light or Dark from the theme in use. Settings > Appearance has Light, Dark, and System segments. System is the default and follows Windows. Both controls save the same `theme` preference in `ui-settings.toml`, beside `settings.toml`.
 
-Settings > **Show About** expands the About section; **Hide About** collapses it. About shows the app version and the time and result of the last update check in this session. Update checks are off by default. When enabled, one request goes to GitHub at start, when About opens, and on **Check now**. The checkbox itself sends no request. With checks off, all three paths send no request and **Check now** is disabled. Alidade does not download or install an update.
+Settings > **Show About** expands the About section; **Hide About** collapses it. About shows version 0.2.0 and the time and result of the last update check in this session. Update checks are off by default. When enabled, one request goes to GitHub at start, when About opens, and on **Check now**. The checkbox itself sends no request. With checks off, all three paths send no request and **Check now** is disabled. Alidade does not download or install an update.
 
 The desktop window starts at 1280 x 800 and has a minimum size of 1008 x 640.
 

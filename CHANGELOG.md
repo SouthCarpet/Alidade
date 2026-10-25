@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-25
+
 ### Added
 
 - A latest-round Home diagram with separate Mbit/s bars and ms marks, a text ping difference, and an honest missing-round reason. New results draw in over 220 ms; reduced motion shows the final marks at once.
@@ -52,6 +54,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Size the chart side margins from the widest axis label, so a label of three or four digits shows in full.
 
 - Set the Rust cognitive complexity limit to 12 (`clippy.toml`). Three store tests and the startup flag parser were split into helpers to meet it. No assertion or flag behaviour changed.
+
+### Fixed
+
+- Isolate bulk loopback traffic in the provider integration tests. Keep the original assertions and timing budgets.
 
 ## [0.1.0] - 2026-08-30
 

@@ -2,6 +2,12 @@
 
 This note records current desktop behavior, the plan 120 p3 evidence paths, historical screenshots and reviews, a measured single test from Task 2, and verification limits.
 
+## Release 0.2.0 captures (2026-10-25)
+
+The current README images are [Home with full data](screens/release-0.2.0-home-light.png) and [Continuous](screens/release-0.2.0-continuous-light.png). Both use the 0.2.0 app, the light theme, and a 1280 x 800 client area. `seed_demo` writes 60 rounds and a matching scratch `settings.toml`. The launched app receives both `--db` and `--settings`. After a fixed 30-second wait, client-area PrintWindow captures only that app window. No measurement or global input is used.
+
+Capture arguments, process IDs, binary and image hashes, and the source head are recorded in `A:/tmp/120-p4-release/captures.json`. The screenshot catalog scan is `A:/tmp/120-p4-release/slop-scan.md`. The separate historical set below is retained as history.
+
 ## What each screen does
 
 ### Home
