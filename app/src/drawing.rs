@@ -341,3 +341,106 @@ fn canvas_text(
         ..canvas::Text::default()
     }
 }
+
+#[cfg(test)]
+mod canvas_render_tests {
+    use super::*;
+    use crate::chart::canvas_pixels;
+    use canvas::Program;
+
+    async fn assert_scale_ends(data: Diagram, labels: &[(&str, f32, bool)]) {
+        let diagram = DiagramCanvas {
+            data,
+            palette: Palette::light(),
+            frames: [(0.0, 1.0); 3],
+        };
+        let size = Size::new(824.0, 96.0);
+        let mut actual_renderer = canvas_pixels::renderer().await;
+        let geometry = diagram.draw(
+            &(),
+            &actual_renderer,
+            &Theme::Light,
+            Rectangle::with_size(size),
+            mouse::Cursor::Unavailable,
+        );
+        let actual = canvas_pixels::render(&mut actual_renderer, geometry, Size::new(824, 96));
+        let mut expected_renderer = canvas_pixels::renderer().await;
+        let mut frame = canvas::Frame::new(&expected_renderer, size);
+        for &(content, x, right) in labels {
+            frame.fill_text(canvas::Text {
+                content: content.into(),
+                position: Point::new(x, 84.0),
+                color: Palette::light().muted(),
+                size: TYPE.xs.into(),
+                font: font_numeric(),
+                align_x: if right {
+                    alignment::Horizontal::Right
+                } else {
+                    alignment::Horizontal::Left
+                }
+                .into(),
+                align_y: alignment::Vertical::Center,
+                ..canvas::Text::default()
+            });
+        }
+        let expected = canvas_pixels::render(
+            &mut expected_renderer,
+            vec![frame.into_geometry()],
+            Size::new(824, 96),
+        );
+        canvas_pixels::assert_region_eq(
+            &actual,
+            &expected,
+            824,
+            [0, 78, 824, 96],
+            "Diagram scale text",
+        );
+    }
+
+    #[tokio::test]
+    async fn diagram_draw_keeps_zero_and_rounded_end_on_both_scales() {
+        // R3-F1/M4: the real draw() must replay texts after the first three labels.
+        // Oracle: p3 summary precision, 94.03164 Mbit/s and 42.8858 ms.
+        assert_scale_ends(
+            Diagram {
+                speed: Scale {
+                    unit: "Mbit/s",
+                    values: [Some(94.03164), Some(27.89626)],
+                },
+                latency: Scale {
+                    unit: "ms",
+                    values: [Some(13.7), Some(42.8858)],
+                },
+            },
+            &[
+                ("0", 96.0, false),
+                ("94.03 Mbit/s", 392.0, true),
+                ("0", 520.0, false),
+                ("42.9 ms", 816.0, true),
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn diagram_draw_keeps_reason_on_each_empty_scale() {
+        // R3-F1/M4: absent values must draw the reason, never a zero or end value.
+        assert_scale_ends(
+            Diagram {
+                speed: Scale {
+                    unit: "Mbit/s",
+                    values: [None, None],
+                },
+                latency: Scale {
+                    unit: "ms",
+                    values: [None, None],
+                },
+            },
+            &[
+                ("No values in this round", 96.0, false),
+                ("No values in this round", 520.0, false),
+            ],
+        )
+        .await;
+    }
+}

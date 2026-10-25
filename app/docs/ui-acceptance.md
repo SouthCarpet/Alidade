@@ -50,6 +50,10 @@ Additive surface inventory:
 - Regression evidence: `A:/tmp/120-p3-fix1/red.log`, `green.log`; captures in `A:/tmp/120-p3-fix1/after/`.
 - Fix round 2 tests inspect panel key entries, built header/value cells and canvas text. Mutation logs, gate logs and unchanged-layout captures are in `A:/tmp/120-p3-fix2/`.
 - The two fix round 2 light captures match every app pixel from fix round 1. Full-window equality is limited by native Windows title-bar differences in rows 0–30; capture used PrintWindow and a fixed 30-second wait.
+- Fix round 3 tests call the actual Continuous and diagram canvas `draw()` functions and render their returned geometry with the existing headless tiny-skia renderer. Independent expected frames check all six labelled key strokes, both scale ends and both missing-values reasons. These tests reach the drawing loops, beyond the draw-list helpers tested in round 2.
+- The fix round 3 table test lays out the actual row builder with six distinct measurements and checks all seven values in column order, with Time left-aligned and every numeric value right-aligned. This catches a numeric call site that incorrectly passes `RoundColumn::Time`.
+- Fix round 3 mutation, gate and capture evidence is in `A:/tmp/120-p3-fix3/`; the test contract is `test-contract.md` and the two light captures are in `after/`.
+- Both fix round 3 light captures match every app pixel from fix round 2. Native Windows title-bar differences remain limited to rows 0–30; capture used PrintWindow and a fixed 30-second wait.
 
 ### History
 

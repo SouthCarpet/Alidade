@@ -24,6 +24,10 @@ const DASH_PATTERNS: [&[f32]; 6] = [
     &[8.0, 4.0, 1.5, 4.0, 1.5, 4.0],
 ];
 
+#[cfg(test)]
+#[path = "../tests/support/canvas_pixels.rs"]
+pub(crate) mod canvas_pixels;
+
 #[derive(Clone, Copy)]
 pub struct SeriesSpec {
     pub label: &'static str,
@@ -708,6 +712,81 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     (year + i64::from(month <= 2), month as u32, day as u32)
+}
+
+#[cfg(test)]
+mod canvas_render_tests {
+    use super::*;
+    use canvas::Program;
+
+    #[tokio::test]
+    async fn continuous_draw_keeps_all_six_key_labels_and_sample_strokes() {
+        // R3-F1/M1: an empty, wide chart still draws all six labelled key samples.
+        // Oracle: the p3 series contract, independent of key_entries/series_specs.
+        let chart = LineChart::new(&[], TimeRange::Hour);
+        let size = Size::new(2400.0, 240.0);
+        let mut actual_renderer = canvas_pixels::renderer().await;
+        let geometry = <LineChart as Program<()>>::draw(
+            &chart,
+            &ChartState::default(),
+            &actual_renderer,
+            &iced::Theme::Light,
+            Rectangle::with_size(size),
+            mouse::Cursor::Unavailable,
+        );
+        let actual = canvas_pixels::render(&mut actual_renderer, geometry, Size::new(2400, 240));
+        let mut expected_renderer = canvas_pixels::renderer().await;
+        let mut frame = Frame::new(&expected_renderer, size);
+        let panels: [&[(&str, &[f32], usize)]; 3] = [
+            &[("Download", &[], 0), ("Upload", &[8.0, 5.0], 1)],
+            &[
+                ("Idle", &[1.5, 4.0], 2),
+                ("Load", &[8.0, 4.0, 1.5, 4.0], 3),
+                ("Jitter", &[16.0, 6.0], 4),
+            ],
+            &[("Packet loss", &[8.0, 4.0, 1.5, 4.0, 1.5, 4.0], 5)],
+        ];
+        for (plot, entries) in chart.plots(size).into_iter().zip(panels) {
+            let mut x = plot.x;
+            let y = plot.y + plot.height + SPACE.s4;
+            for &(label, segments, color) in entries {
+                frame.stroke(
+                    &Path::line(CanvasPoint::new(x, y), CanvasPoint::new(x + 48.0, y)),
+                    Stroke {
+                        line_dash: LineDash {
+                            segments,
+                            offset: 0,
+                        },
+                        ..Stroke::default()
+                            .with_width(2.0)
+                            .with_color(Palette::light().theme.chart[color].into())
+                    },
+                );
+                frame.fill_text(Text {
+                    content: label.into(),
+                    position: CanvasPoint::new(x + 52.0, y),
+                    color: Palette::light().muted(),
+                    size: TYPE.xs.into(),
+                    font: crate::ui::font_numeric(),
+                    align_y: alignment::Vertical::Center,
+                    ..Text::default()
+                });
+                x += 52.0 + label.len() as f32 * TYPE.xs * 0.62 + SPACE.s3;
+            }
+        }
+        let expected = canvas_pixels::render(
+            &mut expected_renderer,
+            vec![frame.into_geometry()],
+            Size::new(2400, 240),
+        );
+        canvas_pixels::assert_region_eq(
+            &actual,
+            &expected,
+            2400,
+            [0, 196, 2400, 240],
+            "Continuous key",
+        );
+    }
 }
 
 #[cfg(test)]

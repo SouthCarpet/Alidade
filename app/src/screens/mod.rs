@@ -474,6 +474,56 @@ pub(crate) fn with_toast<'a>(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn table_row_keeps_each_measurement_in_its_own_aligned_column() {
+        // R3/M5: distinct values must reach Time/Down/Up/Idle/Load/Jitter/Loss in order.
+        // Oracle: the shared seven-column table contract, with Time left and numbers right.
+        use iced::advanced::{layout, renderer::Headless, text::Renderer, widget::Tree};
+        use iced::alignment::Horizontal::{Left, Right};
+
+        let renderer =
+            iced::Renderer::new(iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"))
+                .await
+                .expect("headless table renderer");
+        let mut row = stub_row(UNIX_EPOCH);
+        row.down_bps = Some(94_030_000.0);
+        row.up_bps = Some(27_890_000.0);
+        row.ping_idle_ms = Some(13.7);
+        row.ping_down_ms = Some(40.0);
+        row.ping_up_ms = Some(45.8);
+        row.jitter_ms = Some(2.3);
+        row.loss_pct = Some(1.25);
+        let mut element = table_row(Palette::light(), &row);
+        let mut tree = Tree::new(element.as_widget());
+        element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(iced::Size::ZERO, iced::Size::new(1200.0, 40.0)),
+        );
+        let actual: Vec<_> = [0, 2, 3, 5, 6, 8, 9]
+            .into_iter()
+            .map(|index| {
+                let paragraph = tree.children[index].state.downcast_ref::<
+                iced::widget::text::State<<iced::Renderer as Renderer>::Paragraph>
+            >();
+                (paragraph.content().trim(), paragraph.align_x())
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                ("1970-01-01 00:00", Left.into()),
+                ("94.03", Right.into()),
+                ("27.89", Right.into()),
+                ("13.7", Right.into()),
+                ("42.9", Right.into()),
+                ("2.3", Right.into()),
+                ("1.25", Right.into()),
+            ],
+            "table row values and column alignment"
+        );
+    }
+
     #[test]
     fn a_missing_throughput_is_not_a_zero() {
         assert_eq!(format_mbit(None).trim(), "—");
