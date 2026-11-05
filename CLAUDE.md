@@ -69,4 +69,33 @@ required for the common case.
 No separate tag is required. Default behavior stays single-vault so
 existing callers are unaffected. See
 `A:/projects-vault/scripts/README.md` for the full list.
+
+### Documentation follows every change
+
+For every change that alters behaviour, output, limits, host integration or
+version-dependent facts, update README and every affected document in the
+same task. Briefs name the documents. The additive-surface inventory has one
+bullet for each new field, key or rule. An independent verifier checks
+documentation currency with quoted facts and section attribution. Before a
+version bump, scan all version-bearing sentences, including About, Stav,
+install and checksum text. Rule:
+`A:/projects-vault/vault/knowledge/rules/rule_docs_follow_every_change.md`.
+
+### Owner decisions go through a choice page
+
+When Michal must decide more than one thing, or choose between visual
+proposals, build a local choice page and read his answer from the file the
+page sends back. Do not ask a list of questions in chat. Rule:
+`A:/projects-vault/vault/knowledge/rules/rule_owner_choice_pages.md`.
+
+```powershell
+py A:/projects-vault/scripts/choice_page.py serve <spec.json> --out-dir <dir> --port 0
+```
+
+The skill `choice-page` in this project (`.claude/skills/choice-page/SKILL.md`)
+holds the steps. Every choice card carries a "Čo to je" block (what it does,
+who uses it, what state it is in) above "Prečo sa pýtam". The tool is a plain
+CLI plus a browser, so a Codex, Grok or Gemini session uses it the same way as
+a Claude session: add `--open` when the session runs outside T3. One simple
+question may stay in chat.
 <!-- /multi-vault-block:v1 -->
